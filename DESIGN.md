@@ -16,8 +16,12 @@ The owner requested Developer GitHub sign-in, repository discovery, and explicit
 repository creation after a saved Windows login became invalid. The accepted
 [`Developer GitHub setup`](docs/developer-github-setup-design.md) extends the earlier
 publication design with a device-authorization flow, repository picker, and
-account/name/visibility-bound creation. Setup does not upload project files or
-relax feature review, protected-check, or merge requirements.
+account/name/visibility-bound creation. A selected repository may also supply the
+suggested name for one explicit empty local Windows workspace directory. That
+create-only action is revision-bound, serialized with GitHub and Developer work,
+and rejects files, links, reparse points, nested names, and paths outside the
+workspace. It performs no clone, import, upload, connection save, or feature start.
+Setup does not relax feature review, protected-check, or merge requirements.
 
 The owner approved automatic GitHub publication for connected Developer projects:
 one feature branch, an exact reviewed commit, a pull request, required checks, normal
@@ -25,6 +29,12 @@ automatic merge, and verified remote base before queue advancement.
 [`Developer GitHub publication`](docs/developer-github-publication-design.md) owns
 this extension and its recovery rules. Windows retains authority; this does not
 activate production publication or retroactively publish historical local results.
+An owner may separately close an unresolved pull request without merging, then use
+the authenticated abandonment action. Windows must observe the exact retained PR as
+closed and unmerged with the reviewed head, repository, and base branch unchanged
+before atomically preserving its evidence, tombstoning the feature, and clearing the
+barrier. The action performs no GitHub mutation, never claims publication success,
+and remains cancellation-dominant.
 
 The owner approved project-grouped Developer chat history and one-click New Chat.
 [`Developer chat history`](docs/developer-chat-history-design.md) owns this extension:

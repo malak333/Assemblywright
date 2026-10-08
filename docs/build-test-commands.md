@@ -93,6 +93,20 @@ python3 scripts/developer-runner-github-setup-e2e.py --binary target/debug/assem
 python3 scripts/developer-runner-settings-e2e.py --binary target/debug/assemblywright-developer
 ```
 
+The GitHub setup native E2E also exercises authenticated explicit local-project
+creation, stale/invalid/file/link rejection, exact revision advancement,
+idempotent observation, the empty-directory guarantee, and agreement between the
+runner `local_projects` projection and `GET /chat/projects`. It uses no live GitHub
+credentials and is not signing, notarization, installed-device, or external
+publication proof.
+
+The publication native E2E also creates an unresolved PR, proves abandonment rejects
+open, merged, missing, and head-drifted observations, proves Stop leaves the attention
+checkpoint durable, then accepts only the exact closed-unmerged PR. It verifies the
+candidate/review/PR/check/event history survives the tombstone and restart, the
+barrier clears, idempotent replay does not advance revision, and the action issues no
+push, PR-create, or merge command. Fixture observations are not live GitHub proof.
+
 Run the corresponding `.exe` runner and fixture on native Windows. The publication
 fixture uses real local Git and a controlled GitHub CLI fixture; the setup fixture
 uses controlled authentication, repository-discovery, and creation processes. They

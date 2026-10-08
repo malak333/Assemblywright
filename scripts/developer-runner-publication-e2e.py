@@ -276,6 +276,8 @@ def main():
             assert feature["checkpoint"] == "publication_merged"
             assert feature["publication_commit_sha"] == feature["publication_merged_sha"]
             assert git("--git-dir", str(remote), "show", "main:app.py", capture=True) == "VALUE = 1"
+            successful_publication_state = json.loads(fixture_state.read_text())
+            assert successful_publication_state["merged"] == feature["publication_merged_sha"]
 
             # Reproduce the historical ledger bug as persisted state: a later
             # unrelated project-tool revision interrupted an already-complete
@@ -505,6 +507,164 @@ def main():
                 for call in retry_calls
             ), retry_calls
 
+            # Abandonment is an explicit observation-only recovery for an exact
+            # retained PR that the owner has already closed without merging.
+            # Reset the fixture base content so this second feature has a real
+            # reviewed edit, while retaining the earlier publication history.
+            (descendant / "app.py").write_bytes(b"VALUE = 0\n")
+            git("add", "app.py", cwd=descendant)
+            git("commit", "-m", "prepare abandonment fixture", cwd=descendant)
+            git("push", "origin", "main", cwd=descendant)
+            abandonment_fixture = json.loads(fixture_state.read_text())
+            abandonment_fixture.update(
+                pr_number=None, head=None, base=None, merged=None, closed=False,
+            )
+            fixture_state.write_text(json.dumps(abandonment_fixture))
+            mode.write_text("pending")
+            abandoned_id = enqueue("connected", "[publication:closed-unmerged-abandon]")
+            control("start")
+            waiting = wait(lambda value: next(
+                item for item in value["queue"] if item["id"] == abandoned_id
+            )["publication_stage"] == "wait_required_checks")
+            waiting_feature = next(item for item in waiting["queue"] if item["id"] == abandoned_id)
+            exact_head = waiting_feature["publication_commit_sha"]
+            control("stop")
+            attention = wait(lambda value: not value["github_publication_running"] and next(
+                item for item in value["queue"] if item["id"] == abandoned_id
+            )["checkpoint"] == "publication_attention")
+            attention_feature = next(item for item in attention["queue"] if item["id"] == abandoned_id)
+            assert attention_feature["can_abandon_publication"] is True
+
+            def abandon(snapshot, checkpoint="publication_attention"):
+                return api("publication", dict(
+                    action="abandon", feature_id=abandoned_id,
+                    expected_revision=snapshot["revision"], expected_checkpoint=checkpoint,
+                ))
+
+            # An open, merged, missing, or head-drifted PR cannot clear the
+            # unresolved-publication barrier.
+            rejected("publication", dict(
+                action="abandon", feature_id=abandoned_id,
+                expected_revision=attention["revision"],
+                expected_checkpoint="publication_attention",
+            ))
+            fixture = json.loads(fixture_state.read_text())
+            fixture["closed"] = True
+            fixture["head"] = "f" * 40
+            fixture_state.write_text(json.dumps(fixture))
+            rejected("publication", dict(
+                action="abandon", feature_id=abandoned_id,
+                expected_revision=attention["revision"],
+                expected_checkpoint="publication_attention",
+            ))
+            fixture["head"] = exact_head
+            fixture["merged"] = exact_head
+            fixture_state.write_text(json.dumps(fixture))
+            rejected("publication", dict(
+                action="abandon", feature_id=abandoned_id,
+                expected_revision=attention["revision"],
+                expected_checkpoint="publication_attention",
+            ))
+            fixture["merged"] = None
+            fixture["pr_number"] = None
+            fixture_state.write_text(json.dumps(fixture))
+            rejected("publication", dict(
+                action="abandon", feature_id=abandoned_id,
+                expected_revision=attention["revision"],
+                expected_checkpoint="publication_attention",
+            ))
+            fixture["pr_number"] = 17
+            fixture_state.write_text(json.dumps(fixture))
+
+            # Stop cancels an in-flight observation and leaves the exact durable
+            # attention checkpoint unchanged for a later owner retry.
+            mode.write_text("abandon-wait")
+            cancellation = {}
+            def request_abandonment():
+                try:
+                    cancellation["value"] = abandon(api())
+                except urllib.error.HTTPError as error:
+                    error.response_body = error.read(16 * 1024)
+                    cancellation["error"] = error
+            abandoning = threading.Thread(target=request_abandonment)
+            abandoning.start()
+            wait(lambda value: value["github_publication_running"] is True)
+            control("stop")
+            abandoning.join(timeout=15)
+            assert not abandoning.is_alive()
+            assert cancellation.get("error") is not None
+            assert cancellation["error"].code == 409
+            after_cancel = wait(lambda value: value["github_publication_running"] is False)
+            cancelled_feature = next(item for item in after_cancel["queue"] if item["id"] == abandoned_id)
+            assert cancelled_feature["status"] == "failed"
+            assert cancelled_feature["checkpoint"] == "publication_attention"
+            assert cancelled_feature["publication_status"] == "attention"
+
+            with closing(sqlite3.connect(data / "developer.sqlite3")) as connection_db:
+                before_abandonment = json.loads(connection_db.execute(
+                    "SELECT state FROM developer_state WHERE id=1"
+                ).fetchone()[0])
+            retained_before = next(item for item in before_abandonment["queue_v13"]
+                                   if item["id"] == abandoned_id)
+            publication_before = retained_before["publication"]
+            review_before = retained_before["review_history"]
+            candidate_before = retained_before["publication_candidate"]
+            calls_before_abandonment = calls_path.read_text().splitlines()
+            mode.write_text("pending")
+            abandoned = abandon(after_cancel)
+            assert abandoned["revision"] == after_cancel["revision"] + 1
+            assert abandoned["github_publication_unresolved"] is False
+            assert all(item["id"] != abandoned_id for item in abandoned["queue"])
+            with closing(sqlite3.connect(data / "developer.sqlite3")) as connection_db:
+                durable_abandoned = json.loads(connection_db.execute(
+                    "SELECT state FROM developer_state WHERE id=1"
+                ).fetchone()[0])
+            retained_after = next(item for item in durable_abandoned["queue_v13"]
+                                  if item["id"] == abandoned_id)
+            assert retained_after["status"] == "removed"
+            assert retained_after["checkpoint"] == "publication_abandoned"
+            assert retained_after["review_history"] == review_before
+            assert retained_after["publication_candidate"] == candidate_before
+            publication_after = retained_after["publication"]
+            for field in (
+                "repository_url", "repository_slug", "base_branch", "feature_branch",
+                "base_sha", "candidate_tree_sha", "commit_sha", "pr_number", "pr_url",
+                "merged_sha", "required_checks", "strict_required_checks",
+            ):
+                assert publication_after[field] == publication_before[field]
+            assert publication_after["status"] == "abandoned"
+            assert publication_after["stage"] == "abandoned"
+            assert publication_after["events"][:-1] == publication_before["events"]
+            assert publication_after["events"][-1]["kind"] == "receipt"
+            assert publication_after["events"][-1]["stage"] == "abandoned"
+            abandonment_calls = [json.loads(line) for line in calls_path.read_text().splitlines()[len(calls_before_abandonment):]]
+            assert any(call["tool"] == "gh" and call["arguments"][:2] == ["pr", "view"]
+                       for call in abandonment_calls)
+            assert not any(
+                call["tool"] == "git" and "push" in call["arguments"]
+                or call["tool"] == "gh" and call["arguments"][:2] in (["pr", "create"], ["pr", "merge"])
+                for call in abandonment_calls
+            ), abandonment_calls
+
+            idempotent = abandon(abandoned, checkpoint="publication_abandoned")
+            assert idempotent["revision"] == abandoned["revision"]
+            api("control", {"action": "shutdown"})
+            process.wait(timeout=10)
+            output.close()
+            start_runner(append=True)
+            restarted_abandoned = wait(lambda value: not value["running"])
+            assert restarted_abandoned["github_publication_unresolved"] is False
+            assert all(item["id"] != abandoned_id for item in restarted_abandoned["queue"])
+            with closing(sqlite3.connect(data / "developer.sqlite3")) as connection_db:
+                restarted_durable = json.loads(connection_db.execute(
+                    "SELECT state FROM developer_state WHERE id=1"
+                ).fetchone()[0])
+            restarted_record = next(item for item in restarted_durable["queue_v13"]
+                                    if item["id"] == abandoned_id)
+            assert restarted_record["status"] == "removed"
+            assert restarted_record["checkpoint"] == "publication_abandoned"
+            assert restarted_record["publication"] == publication_after
+
             local_id = enqueue("local-only", "[publication:local-only]")
             control("start")
             local = wait(lambda value: next(item for item in value["queue"] if item["id"] == local_id)["status"] == "succeeded")
@@ -513,7 +673,9 @@ def main():
             assert local_feature["publication_pr_url"] is None
 
             state = json.loads(fixture_state.read_text())
-            assert state["pr_number"] == 17 and state["merged"] == feature["publication_merged_sha"]
+            assert state["pr_number"] == 17
+            assert state["head"] == exact_head and state["closed"] is True
+            assert state["merged"] is None
             assert state["check_run_observations"] >= 3
             print(json.dumps({
                 "native_platform": sys.platform,
@@ -527,6 +689,9 @@ def main():
                 "completed_receipt_descendant_reverified_without_effect_replay": True,
                 "completed_receipt_workspace_interruption_recovered_after_restart": True,
                 "terminal_publication_survives_late_tool_revision": True,
+                "closed_unmerged_publication_abandoned_without_remote_effect": True,
+                "abandonment_rejects_open_merged_missing_and_drifted_pr": True,
+                "abandonment_cancellation_and_restart_preserve_attention_or_terminal_history": True,
                 "unconnected_project_local_only": True,
                 "live_github_credentials_used": False,
             }))

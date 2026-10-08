@@ -98,6 +98,20 @@ reconciliation action may inspect the existing branch, PR, checks, and merge to
 recover only the same immutable operation; uncertain state remains attention.
 Publication failure cannot consume a model-repair attempt or authorize new code.
 
+When the owner has separately closed the exact retained pull request without
+merging, an explicit abandonment action may end the unresolved publication. It is
+bound to the exact feature, runner revision, and `publication_attention` checkpoint.
+Windows performs one read-only PR observation and requires the retained repository,
+PR number/URL, base branch, and reviewed head commit, `CLOSED` state, and no merge
+commit. Open, merged, missing, or drifted PRs reject. Stop, Emergency Pause,
+shutdown, or restart before the atomic local transition leaves the durable attention
+state unchanged. Acceptance appends one `abandoned` receipt, retains the frozen
+candidate, approval/review, PR, check policy, and earlier event history, marks the
+feature removed at `publication_abandoned`, and clears the barrier. It never closes
+or deletes remote objects, replays publication, reports success, or automatically
+starts later work. A retry against the current abandoned checkpoint is an idempotent
+observation of the local terminal state.
+
 A separate idempotent completion case applies when the persisted publication record
 is already valid `succeeded`/`complete` but the local feature promotion was not
 durable. Restart preserves that contradiction and Resume bypasses model execution,
@@ -117,6 +131,9 @@ a validated GitHub PR link. Distinguish local validation/review completion from
 GitHub publication and merge completion. Disable repair, removal, reviewer changes,
 and new starts when they could bypass unresolved publication. Keep polling and
 controls responsive while checks are pending.
+For attention records with a retained unmerged PR, show a separately confirmed
+Abandon action that explains the required prior PR closure, evidence retention,
+feature removal, and absence of any remote mutation.
 
 ### Developer HTTP contract
 
@@ -128,16 +145,19 @@ runtime readiness separately as `github_publication_available` and
 Each connection carries
 `project`, `repository_url`, `base_branch`, and `automatic_merge`. Feature fields
 include `publication_status`, `publication_stage`, destination, branch, commit,
-PR URL, merged SHA, message, and `can_reconcile_publication`. Optional absence
+PR URL, merged SHA, message, `can_reconcile_publication`, and
+`can_abandon_publication`. Optional absence
 preserves compatibility with older local results; it is never a merged receipt.
 
 Authenticated `GET /publication` observes the snapshot. Strict `POST /publication`
 accepts `action: save_connection` with `expected_revision`, `project`,
 `repository_url`, and `base_branch`; `action: disconnect` with revision/project;
-or `action: reconcile` with revision, `feature_id`, and `expected_checkpoint`.
+`action: reconcile` with revision, `feature_id`, and `expected_checkpoint`; or
+`action: abandon` with the same exact bindings.
 Reconciliation returns an accepted snapshot and proceeds asynchronously.
 Stages cover `prepare_candidate`, `push_branch`, `open_pull_request`,
-`wait_required_checks`, `merge_pull_request`, `verify_remote_base`, and `complete`.
+`wait_required_checks`, `merge_pull_request`, `verify_remote_base`, `complete`, and
+terminal `abandoned`.
 An uncertain effect produces `failed`/`publication_attention`; verified publication
 produces `succeeded`/`publication_merged`. Local-only results retain their review
 checkpoint and are identified as `local_only`.
@@ -151,6 +171,7 @@ checkpoint and are identified as `local_only`.
 | Explicit project connection, existing repository | Infer destination; silently create a public repository | Avoids uploading project code to an unintended destination. |
 | Frozen candidate and durable publication stages | Push whatever is in the project after review | Prevents stale review and duplicate or ambiguous effects. |
 | Reconcile interrupted publication explicitly | Automatic retry; regenerate the feature | Preserves existing PR and merge evidence without replaying uncertain effects. |
+| Abandon only an exact owner-closed, unmerged PR through read-only observation | Delete a branch; treat any failure as abandoned; silently retry | Clears a permanent queue barrier without remote mutation or loss of candidate, review, PR, check, and event evidence. |
 | Reverify an already-complete receipt before local promotion | Trust startup state; replay publication | Closes the receipt/promotion crash window through observation-only PR, ancestry, tree, and reviewed-path evidence. |
 | Rebind an approval hidden by one later no-review proposal marker | Treat any trailing history entry as a new review; search backward over arbitrary outcomes | Accepts only the retained unavailable manual proposal's exact provider-free marker and no-effect lineage, then rebinds the immediately preceding approval without deleting evidence. |
 | Observe exact-head check runs while GitHub registers workflows | Treat empty/subset output or `gh pr checks` exit 1 as terminal; retry publication | Keeps empty, subset, queued, and in-progress observations pending inside the fixed deadline while exact head/app identity and terminal failures remain fail-closed. |
@@ -167,7 +188,8 @@ checkpoint and are identified as `local_only`.
    owner controls, completion gating, cancellation, and restart reconciliation.
 3. Add native Swift connection, publication status, PR link, and recovery controls.
 4. Cover input validation, candidate binding, checks/head drift, legacy state,
-   cancellation, recovery, and queue blocking with focused Rust and Swift tests.
+   cancellation, recovery, exact closed-unmerged abandonment, and queue blocking
+   with focused Rust and Swift tests.
 5. Exercise real local Git and runner HTTP/process boundaries with a controlled
    GitHub fixture. Real GitHub credentials, branch protection, and Windows execution
    require separately reported live evidence.

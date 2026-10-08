@@ -65,6 +65,10 @@ enum DeveloperGitHubURL {
 }
 
 enum DeveloperGitHubRequest {
+  static func createProject(project: String, expectedRevision: UInt64) -> [String: Any] {
+    ["action": "create_project", "project": project, "expected_revision": expectedRevision]
+  }
+
   static func saveConnection(project: String, repositoryURL: String, baseBranch: String,
     expectedRevision: UInt64) -> [String: Any] {
     ["action": "save_connection", "project": project, "repository_url": repositoryURL,
@@ -80,9 +84,23 @@ enum DeveloperGitHubRequest {
     ["action": "reconcile", "feature_id": featureID, "expected_revision": expectedRevision,
      "expected_checkpoint": expectedCheckpoint]
   }
+
+  static func abandon(featureID: String, expectedRevision: UInt64,
+    expectedCheckpoint: String) -> [String: Any] {
+    ["action": "abandon", "feature_id": featureID, "expected_revision": expectedRevision,
+     "expected_checkpoint": expectedCheckpoint]
+  }
 }
 
 enum DeveloperGitHubAcknowledgement {
+  static func createdLocalProject(_ snapshot: DeveloperRunnerSnapshot,
+    expectedRevision: UInt64, project: String) -> Bool {
+    guard snapshot.revision == expectedRevision
+        || expectedRevision < UInt64.max && snapshot.revision == expectedRevision + 1,
+      snapshot.localProjects?.contains(project) == true else { return false }
+    return true
+  }
+
   static func saved(_ snapshot: DeveloperRunnerSnapshot, expectedRevision: UInt64,
     project: String, repositoryURL: String, baseBranch: String) -> Bool {
     guard snapshot.revision > expectedRevision,
@@ -109,9 +127,47 @@ enum DeveloperGitHubAcknowledgement {
           && feature.publicationStatus == "pending" && feature.canReconcilePublication == false
       }
   }
+
+  static func abandoned(_ snapshot: DeveloperRunnerSnapshot, expectedRevision: UInt64,
+    featureID: String) -> Bool {
+    guard snapshot.revision == expectedRevision
+        || expectedRevision < UInt64.max && snapshot.revision == expectedRevision + 1 else {
+      return false
+    }
+    return snapshot.githubPublicationUnresolved == false
+      && !snapshot.queue.contains { $0.id == featureID }
+  }
 }
 
 enum DeveloperGitHubPresentation {
+  static func validLocalProjectName(_ value: String) -> Bool {
+    !value.isEmpty && value.count <= 80 && value.unicodeScalars.allSatisfy {
+      $0.isASCII && (CharacterSet.alphanumerics.contains($0)
+        || CharacterSet(charactersIn: "-_").contains($0))
+    }
+  }
+
+  static func suggestedLocalProjectName(repositoryURL: String) -> String? {
+    guard let url = DeveloperGitHubURL.repository(repositoryURL),
+      let repository = url.path.split(separator: "/").last else { return nil }
+    var suggestion = ""
+    var lastWasDash = false
+    for scalar in repository.unicodeScalars {
+      let accepted = scalar.isASCII && (CharacterSet.alphanumerics.contains(scalar)
+        || CharacterSet(charactersIn: "-_").contains(scalar))
+      if accepted {
+        suggestion.append(Character(String(scalar)))
+        lastWasDash = scalar == "-"
+      } else if !lastWasDash && !suggestion.isEmpty {
+        suggestion.append("-")
+        lastWasDash = true
+      }
+      if suggestion.count == 80 { break }
+    }
+    while suggestion.last == "-" { suggestion.removeLast() }
+    return validLocalProjectName(suggestion) ? suggestion : nil
+  }
+
   static func validProject(_ value: String) -> Bool {
     let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
     return value == trimmed && !trimmed.isEmpty && trimmed.count <= 200
@@ -132,6 +188,7 @@ enum DeveloperGitHubPresentation {
     case "pending": return "GitHub publication pending"
     case "running": return stageLabel(feature.publicationStage)
     case "attention": return "GitHub publication needs attention"
+    case "abandoned": return "Publication abandoned · pull request closed without merge"
     case "succeeded":
       return hasVerifiedMergeEvidence(feature) ? "Merged on GitHub"
         : "GitHub publication result could not be verified"
@@ -197,6 +254,7 @@ enum DeveloperGitHubPresentation {
 struct DeveloperGitHubFeatureStatus: View {
   let feature: DeveloperRunnerFeature
   @ObservedObject var runner: DeveloperRunnerModel
+  @State private var confirmingAbandonment = false
 
   private var safePR: URL? {
     DeveloperGitHubURL.pullRequest(feature.publicationPrUrl,
@@ -220,6 +278,12 @@ struct DeveloperGitHubFeatureStatus: View {
           .help("Inspect the existing branch, pull request, checks, and merge before resuming.")
           .accessibilityIdentifier("developer-reconcile-publication-\(feature.id)")
         }
+        if feature.publicationStatus == "attention" && feature.canAbandonPublication == true {
+          Button("Abandon…", role: .destructive) { confirmingAbandonment = true }
+            .disabled(runner.sending || runner.snapshot?.githubPublicationUnresolved != true)
+            .help("Observe that the exact retained pull request is closed and unmerged, preserve its evidence, and remove this feature from the active queue.")
+            .accessibilityIdentifier("developer-abandon-publication-\(feature.id)")
+        }
       }
       if feature.publicationPrUrl != nil && safePR == nil {
         Text("The reported pull request link could not be verified.").foregroundStyle(.orange)
@@ -233,7 +297,18 @@ struct DeveloperGitHubFeatureStatus: View {
       if let sha = feature.publicationMergedSha ?? feature.publicationCommitSha, !sha.isEmpty {
         Text("Commit: \(sha)").monospaced().textSelection(.enabled)
       }
-    }.font(.caption)
+    }
+    .font(.caption)
+    .confirmationDialog("Abandon this publication?", isPresented: $confirmingAbandonment,
+      titleVisibility: .visible) {
+      Button("Abandon closed pull request", role: .destructive) {
+        guard let revision = runner.snapshot?.revision else { return }
+        Task { try? await runner.abandonPublication(feature, expectedRevision: revision) }
+      }
+      Button("Cancel", role: .cancel) {}
+    } message: {
+      Text("Windows proceeds only after observing that this exact retained pull request is closed and unmerged with its reviewed head unchanged. It preserves publication evidence and removes the feature from the active queue. It does not close or delete the pull request or branch, publish, or merge anything.")
+    }
   }
 }
 
@@ -249,6 +324,9 @@ struct DeveloperGitHubView: View {
   @State private var repositoryName = ""
   @State private var repositoryVisibility = "private"
   @State private var confirmingCreation = false
+  @State private var localProjectName = ""
+  @State private var preserveRepositoryDraftForProject: String?
+  @State private var repositorySelectionSequence = 0
 
   init(runner: DeveloperRunnerModel, projects: [String], configurationPath: String) {
     self.runner = runner
@@ -257,7 +335,7 @@ struct DeveloperGitHubView: View {
   }
 
   private var allProjects: [String] {
-    Array(Set(projects + (runner.snapshot?.githubConnections?.map(\.project) ?? []))).sorted()
+    Array(Set(runner.snapshot?.localProjects ?? projects)).sorted()
   }
   private var project: String { allProjects.isEmpty ? selectedProject : selectedProject }
   private var connection: DeveloperGitHubConnection? {
@@ -276,6 +354,7 @@ struct DeveloperGitHubView: View {
   }
 
   var body: some View {
+    ScrollViewReader { proxy in
     ScrollView {
     VStack(alignment: .leading, spacing: 16) {
       HStack {
@@ -295,12 +374,29 @@ struct DeveloperGitHubView: View {
           systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange)
       }
       if allProjects.isEmpty {
-        TextField("Project name", text: $selectedProject)
-          .accessibilityIdentifier("developer-github-project")
+        Text("No local projects are available. Select a repository, then create its empty local project below.")
+          .font(.caption).foregroundStyle(.secondary)
       } else {
         Picker("Project", selection: $selectedProject) {
           ForEach(allProjects, id: \.self) { Text($0).tag($0) }
         }.accessibilityIdentifier("developer-github-project")
+      }
+      GroupBox("Local project") {
+        VStack(alignment: .leading, spacing: 8) {
+          Text("Create one empty folder under the Windows Developer workspace. This does not clone, download, upload, or connect the repository.")
+            .font(.caption).foregroundStyle(.secondary)
+          TextField("Local project name", text: $localProjectName)
+            .accessibilityIdentifier("developer-github-local-project-name")
+          Button("Create empty local project") { createLocalProject() }
+            .disabled(!canCreateLocalProject)
+            .accessibilityIdentifier("developer-github-local-project-create")
+        }.frame(maxWidth: .infinity, alignment: .leading).padding(6)
+      }
+      .id("developer-github-local-project-form")
+      if runner.snapshot?.localProjects == nil {
+        Label("Update the Windows developer runner to create local projects from this dialog.",
+          systemImage: "exclamationmark.triangle.fill")
+          .font(.caption).foregroundStyle(.orange)
       }
       if connection == nil {
         Text("Not connected · successful features stay local and unpublished")
@@ -349,12 +445,20 @@ struct DeveloperGitHubView: View {
     .frame(width: 680, height: 760)
     .onAppear { selectInitialProject() }
     .task { await setup.observe() }
-    .onChange(of: selectedProject) { _, _ in loadConnection() }
+    .onChange(of: selectedProject) { _, project in
+      if preserveRepositoryDraftForProject != project {
+        preserveRepositoryDraftForProject = nil
+        loadConnection()
+      }
+    }
     .onChange(of: runner.snapshot?.revision) { _, _ in
-      if !runner.sending { loadConnection() }
+      if !runner.sending, preserveRepositoryDraftForProject != selectedProject { loadConnection() }
     }
     .onChange(of: runner.sending) { _, sending in
-      if !sending { loadConnection() }
+      if !sending, preserveRepositoryDraftForProject != selectedProject { loadConnection() }
+    }
+    .onChange(of: repositorySelectionSequence) { _, _ in
+      withAnimation { proxy.scrollTo("developer-github-local-project-form", anchor: .top) }
     }
     .confirmationDialog("Create this GitHub repository?", isPresented: $confirmingCreation,
       titleVisibility: .visible) {
@@ -366,6 +470,7 @@ struct DeveloperGitHubView: View {
       Button("Cancel", role: .cancel) {}
     } message: {
       Text("Account: \(setup.snapshot?.account.login ?? "Unavailable")\nRepository: \(repositoryName)\nVisibility: \(repositoryVisibility.capitalized)\n\nThis initializes a README and does not upload project files or connect this project.")
+    }
     }
   }
 
@@ -451,6 +556,9 @@ struct DeveloperGitHubView: View {
             Button("Select") {
               repositoryURL = repository.url
               baseBranch = repository.defaultBranch
+              localProjectName = DeveloperGitHubPresentation.suggestedLocalProjectName(
+                repositoryURL: repository.url) ?? ""
+              repositorySelectionSequence &+= 1
             }.disabled(!repository.canSelect)
           }
           .accessibilityIdentifier("developer-github-repository-\(repository.id)")
@@ -506,6 +614,12 @@ struct DeveloperGitHubView: View {
       && setup.snapshot?.creation?.state != "attention"
   }
 
+  private var canCreateLocalProject: Bool {
+    canEdit && runner.snapshot?.localProjects != nil
+      && DeveloperGitHubURL.repository(repositoryURL) != nil
+      && DeveloperGitHubPresentation.validLocalProjectName(localProjectName)
+  }
+
   private func accountLabel(_ account: DeveloperGitHubAccount?) -> String {
     switch account?.state {
     case "signed_in": return "Signed in as \(account?.login ?? "Unavailable")"
@@ -538,6 +652,26 @@ struct DeveloperGitHubView: View {
         try await runner.saveGitHubConnection(project: project, repositoryURL: repositoryURL,
           baseBranch: baseBranch, expectedRevision: revision)
       } catch { localError = error.localizedDescription }
+    }
+  }
+
+  private func createLocalProject() {
+    guard let revision = runner.snapshot?.revision,
+      DeveloperGitHubPresentation.validLocalProjectName(localProjectName) else { return }
+    let name = localProjectName
+    let previousProject = selectedProject
+    preserveRepositoryDraftForProject = name
+    selectedProject = name
+    localError = nil
+    Task {
+      do {
+        try await runner.createLocalProject(name, expectedRevision: revision)
+      } catch {
+        preserveRepositoryDraftForProject = nil
+        selectedProject = previousProject
+        loadConnection()
+        localError = error.localizedDescription
+      }
     }
   }
 

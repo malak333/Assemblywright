@@ -274,6 +274,10 @@ impl DeveloperChat {
     }
 
     pub(crate) fn projects(&self) -> Result<Value> {
+        Ok(json!({"projects":self.project_names()?}))
+    }
+
+    pub(crate) fn project_names(&self) -> Result<Vec<String>> {
         let mut projects = Vec::new();
         let mut entries: Vec<_> = fs::read_dir(&self.root)?.collect::<std::io::Result<_>>()?;
         entries.sort_by_key(|entry| entry.file_name());
@@ -282,8 +286,10 @@ impl DeveloperChat {
                 break;
             }
             let name = entry.file_name().to_string_lossy().into_owned();
+            let metadata = fs::symlink_metadata(entry.path())?;
             if !valid_project_name(&name)
                 || entry.file_type()?.is_symlink()
+                || chat_metadata_is_reparse(&metadata)
                 || !entry.file_type()?.is_dir()
             {
                 continue;
@@ -293,7 +299,7 @@ impl DeveloperChat {
                 projects.push(name);
             }
         }
-        Ok(json!({"projects":projects}))
+        Ok(projects)
     }
 
     pub(crate) fn is_running(&self) -> bool {

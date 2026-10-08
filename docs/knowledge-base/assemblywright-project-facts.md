@@ -1,5 +1,19 @@
 # Assemblywright Project Facts
 
+## GitHub selection and local Developer projects
+
+- A GitHub repository selection fills connection details; it does not create a
+  Windows Developer project by itself.
+- The GitHub publication dialog can explicitly create one empty direct directory
+  under the configured Windows workspace using a simple 80-character ASCII project
+  name. This action does not clone, import, upload, connect, plan, enqueue, or start.
+- Real direct workspace directories are projected as `local_projects` and feed the
+  main planning, project-chat, and publication pickers. Queue history and saved
+  repository bindings are not filesystem existence evidence.
+- Creation is exact-revision and idle-gated, observes an existing direct directory
+  idempotently without overwrite, and rejects files, links, Windows reparse points,
+  nested names, and paths outside the workspace.
+
 ## Global permissions and Assembly Line navigation
 
 - The supervised runner has one Windows-owned tool-access policy. An approval
@@ -3361,6 +3375,14 @@ consistency.
   receipt. Startup may rebind its last exact approval only to validate the frozen
   candidate and must preserve the serialized tombstone byte-for-byte. It never
   becomes completion-reverify eligible; later substantive review evidence rejects.
+- A publication attention record can block every later feature after its PR is
+  intentionally closed without merge. Recovery is an authenticated owner action,
+  not an automatic retry: bind the exact feature/revision/checkpoint, observe the
+  retained repository, PR identity, base branch, reviewed head, `CLOSED` state and
+  absent merge commit, then append one terminal abandonment receipt and tombstone
+  the feature atomically. Preserve candidate, review, PR, check and event evidence;
+  open, merged, missing, drifted, cancelled or paused observations leave attention
+  unchanged. The action performs no remote mutation and never becomes success proof.
 
 ## Developer model catalog and installed-provider compatibility
 
@@ -3407,3 +3429,15 @@ consistency.
 - The narrow unsupported-model diagnostic drains stderr concurrently, retains only 16 KiB with zeroizing storage, and emits fixed guidance for the exact selected-model rejection. It never discloses raw stderr or silently switches models.
 - Exact-candidate review blocks actual defects, unmet requirements, nonfunctional validators and missing implemented-behavior coverage. Speculative test hardening for unused APIs, resource attributes, URI variants or future behavior is nonblocking only after complete source inspection confirms no actual requirement or safety violation; aggregation still preserves every rejected batch and blocker.
 - A fixed inert static HTML artifact can use an owner-supplied immutable SHA-256 validation command instead of generated project tests. The installed `aw-fft-working` proof reached success with fresh independent review and zero repairs/escalations; this does not prove arbitrary model-generated content or larger retained FFT projects.
+
+### Windows exact-byte publication checkout (2026-10-07)
+
+- Windows GitHub Actions checkout can convert a validated LF Git blob into CRLF
+  with `core.autocrlf=true`. Exact-byte validators need an explicit base-repository
+  line-ending contract such as `* text=auto eol=lf`; preserve the expected digest
+  and repair checkout inputs through a normally checked/merged prerequisite PR.
+- The installed `aw-fft-demo4` proof completed approved planning, Windows
+  implementation, immutable validation, independent review, required checks and
+  normal merge without candidate or publication intervention after start. See
+  [project picker and publication recovery evidence](../developer-project-picker-validation.md).
+  The abandoned demo3 attempt remains failure evidence, not a successful run.

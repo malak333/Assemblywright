@@ -292,9 +292,12 @@ struct DeveloperPlanningView: View {
     model.sending || runner?.emergencyPaused != false || runner?.running != false
       || runner?.chatRunning == true || runner?.escalationRunning == true
   }
+  private var projectNames: [String] {
+    Array(Set((runner?.localProjects ?? []) + model.projects)).sorted()
+  }
   private var selectedProject: String {
     DeveloperPlanningProjectChoice.resolve(selection: project, newProjectName: newProject,
-      projects: model.projects) ?? ""
+      projects: projectNames) ?? ""
   }
   var body: some View {
     GroupBox("Add a feature · Brainstorm with ChatGPT") {
@@ -320,14 +323,14 @@ struct DeveloperPlanningView: View {
         if selectedId.isEmpty {
           Picker("Project", selection: $project) {
             Text("Select a project").tag(DeveloperPlanningProjectChoice.none)
-            ForEach(model.projects, id: \.self) { name in
+            ForEach(projectNames, id: \.self) { name in
               Text(name).tag(DeveloperPlanningProjectChoice.existing(name))
             }
             Divider()
             Text("New project").tag(DeveloperPlanningProjectChoice.newProject)
           }
           .accessibilityIdentifier("developer-planning-project")
-          .onChange(of: model.projects) { _, projects in
+          .onChange(of: projectNames) { _, projects in
             project = DeveloperPlanningProjectChoice.reconcile(selection: project, projects: projects)
           }
           if project == .newProject {

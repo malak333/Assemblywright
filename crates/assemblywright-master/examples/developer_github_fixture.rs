@@ -32,6 +32,7 @@ struct FixtureState {
     head: Option<String>,
     base: Option<String>,
     merged: Option<String>,
+    closed: bool,
     authenticated: bool,
     created_repositories: Vec<FixtureRepository>,
     check_run_observations: u32,
@@ -149,7 +150,8 @@ fn gh_fixture() -> i32 {
                         number,
                         head,
                         state.base.as_deref(),
-                        state.merged.as_deref()
+                        state.merged.as_deref(),
+                        state.closed
                     )])
                 );
             } else {
@@ -168,6 +170,8 @@ fn gh_fixture() -> i32 {
                 .to_owned();
             state.pr_number = Some(17);
             state.head = Some(head);
+            state.merged = None;
+            state.closed = false;
             state.base = Some(
                 git_output(
                     &remote,
@@ -183,6 +187,9 @@ fn gh_fixture() -> i32 {
             0
         }
         values if values.starts_with(&["pr".into(), "view".into()]) => {
+            if fixture_mode() == "abandon-wait" {
+                std::thread::sleep(std::time::Duration::from_secs(5));
+            }
             let number = state.pr_number.expect("fixture PR exists");
             let head = state.head.as_deref().expect("fixture PR head");
             print!(
@@ -192,7 +199,8 @@ fn gh_fixture() -> i32 {
                     number,
                     head,
                     state.base.as_deref(),
-                    state.merged.as_deref()
+                    state.merged.as_deref(),
+                    state.closed
                 )
             );
             0
@@ -685,6 +693,7 @@ fn pr_value(
     head: &str,
     base: Option<&str>,
     merged: Option<&str>,
+    closed: bool,
 ) -> Value {
     json!({
         "number": number,
@@ -692,7 +701,7 @@ fn pr_value(
         "headRefOid": head,
         "baseRefName": "main",
         "baseRefOid": merged.or(base),
-        "state": if merged.is_some() { "MERGED" } else { "OPEN" },
+        "state": if merged.is_some() { "MERGED" } else if closed { "CLOSED" } else { "OPEN" },
         "mergeCommit": merged.map(|oid| json!({"oid":oid})),
     })
 }
