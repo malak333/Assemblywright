@@ -234,6 +234,16 @@ the later clean-empty correction. Final-head canonical validation, independent
 review, installation, and hosted results belong to the final publication record
 on [PR #442](https://github.com/malak333/Assemblywright/pull/442).
 
+A later full local gate passed at 05:03:52 UTC with the clean-empty and legacy
+no-op compatibility corrections, including all four staged modes (Developer
+workflow: 811.37 seconds). The first hosted macOS attempt subsequently reached
+its aggregate 150-second fixture deadline during second-stage validation in the
+protected-retry mode. The runner remained active with the exact second stage
+applied and no tool attention. The repeated-stage completion proofs use a
+separate 240-second aggregate deadline, while retaining the 15-second HTTP timeout,
+exact terminal assertions, immutable validation, review lineage, and process
+cleanup. This fixture timing adjustment does not change installed runtime bytes.
+
 Documentation and conversation-derived repository knowledge describe each
 boundary. Relevant unit coverage includes identity, acknowledgement ordering,
 casing, cancellation, current policy, malformed evidence, and effect-free retry.

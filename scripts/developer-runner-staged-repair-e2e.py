@@ -83,6 +83,7 @@ def main():
 
     phases = []
     staged_feedback_observed = []
+    model_calls = []
 
     class Model(http.server.BaseHTTPRequestHandler):
         def log_message(self, *unused):
@@ -109,6 +110,7 @@ def main():
             if self.path != "/v1/chat/completions":
                 self.send_error(404)
                 return
+            model_calls.append(None)
             prompt = json.dumps(request.get("messages", []))
             if not request.get("tools"):
                 raise AssertionError("lineage fixture expected the real project-tool lane")
@@ -250,6 +252,33 @@ def main():
             with urllib.request.urlopen(request, timeout=15) as response:
                 return json.load(response)
 
+        def timeout_diagnostic(state, timeout):
+            queue = state.get("queue", []) if isinstance(state, dict) else []
+            feature = queue[0] if len(queue) == 1 else None
+            current = None if feature is None else {
+                key: feature.get(key) for key in [
+                    "status", "checkpoint", "auto_repair_lifecycle",
+                    "auto_repair_step_elapsed_ms", "repair_attempts",
+                    "escalation_count", "escalation_status", "review_attempts",
+                    "review_status", "tool_workspace_revision",
+                ]
+            }
+            global_state = None if not isinstance(state, dict) else {
+                key: state.get(key) for key in [
+                    "revision", "running", "emergency_paused", "repair_active",
+                    "escalation_running", "tools_running", "tools_need_attention",
+                ]
+            }
+            return {
+                "timeout_seconds": timeout,
+                "phase_count": len(phases),
+                "phases": list(phases),
+                "model_call_count": len(model_calls),
+                "state": global_state,
+                "feature": current,
+                "runner_log_bytes": log_path.stat().st_size if log_path.exists() else 0,
+            }
+
         def wait(predicate, timeout=150):
             deadline = time.monotonic() + timeout
             state = None
@@ -263,7 +292,8 @@ def main():
                 except OSError:
                     pass
                 time.sleep(.05)
-            raise AssertionError(f"Timed out: {state}\n{log_path.read_text(errors='replace')}")
+            raise AssertionError("Timed out: " + json.dumps(
+                timeout_diagnostic(state, timeout), sort_keys=True))
 
         try:
             deadline = time.monotonic() + 20
@@ -319,9 +349,12 @@ def main():
                 "expected_model_target": feature["model_target"],
                 "expected_status": feature["status"],
                 "expected_checkpoint": feature["checkpoint"]})
+            workflow_timeout = 240 if (
+                args.protected_staged_retry_only or args.empty_staged_retry_only
+            ) else 150
             completed = wait(lambda state: not state["running"] and
                 next(item for item in state["queue"] if item["id"] == feature_id)["status"]
-                == "succeeded")
+                == "succeeded", timeout=workflow_timeout)
             public = next(item for item in completed["queue"] if item["id"] == feature_id)
             expected_repairs = 0 if (args.protected_staged_retry_only or
                 args.empty_staged_retry_only) else 1
