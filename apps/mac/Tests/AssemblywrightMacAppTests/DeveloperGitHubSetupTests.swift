@@ -205,6 +205,42 @@ struct DeveloperGitHubSetupTests {
   }
 
   @Test
+  func localProjectHandoffRequiresTheExactSuccessfulCreationOperation() throws {
+    let operation = UUID()
+    let expected = DeveloperGitHubProjectHandoffExpectation(operationID: operation,
+      expectedLogin: "Owner-1", name: "demo", visibility: "private")
+    let succeeded = try decode(#"""
+      {"revision":5,"account":{"state":"signed_in","login":"Owner-1","message":"Ready"},
+       "repositories":[],"repository_page":1,"has_more":false,"busy":false,"can_mutate":true,
+       "creation":{"operation_id":"\#(operation.uuidString.lowercased())",
+        "repository_url":"https://github.com/Owner-1/demo","repository_id":"repo-1",
+        "name_with_owner":"Owner-1/demo","visibility":"private","default_branch":"main",
+        "state":"succeeded","message":"Created"}}
+      """#)
+    let handoff = try #require(DeveloperGitHubSetupHandoff.resolve(
+      succeeded.creation, expected: expected))
+    #expect(handoff.operationId == operation.uuidString.lowercased())
+    #expect(handoff.project == "demo")
+    #expect(handoff.repositoryURL == "https://github.com/Owner-1/demo")
+    #expect(handoff.baseBranch == "main")
+
+    let unrelated = DeveloperGitHubProjectHandoffExpectation(operationID: UUID(),
+      expectedLogin: "Owner-1", name: "demo", visibility: "private")
+    #expect(DeveloperGitHubSetupHandoff.resolve(succeeded.creation, expected: unrelated) == nil)
+    for terminalWithoutCreation in ["attention", "existing", "absent"] {
+      let value = try decode(#"""
+        {"revision":6,"account":{"state":"signed_in","login":"Owner-1","message":"Ready"},
+         "repositories":[],"repository_page":1,"has_more":false,"busy":false,"can_mutate":true,
+         "creation":{"operation_id":"\#(operation.uuidString.lowercased())",
+          "repository_url":"https://github.com/Owner-1/demo","repository_id":"repo-1",
+          "name_with_owner":"Owner-1/demo","visibility":"private","default_branch":"main",
+          "state":"\#(terminalWithoutCreation)","message":"Observed"}}
+        """#)
+      #expect(DeveloperGitHubSetupHandoff.resolve(value.creation, expected: expected) == nil)
+    }
+  }
+
+  @Test
   func signInAcknowledgementBindsCurrentAccountButHistoryMayExpire() throws {
     let operation = UUID()
     let historicalExpired = try decode(#"""
@@ -244,10 +280,23 @@ struct DeveloperGitHubSetupTests {
     let requests = root.appendingPathComponent("requests.jsonl")
     let script = #"""
 import http.server,json,sys
+creation=None
 class Handler(http.server.BaseHTTPRequestHandler):
+ def do_GET(self):
+  with open(sys.argv[1],'a') as f:f.write(json.dumps({'path':self.path,'auth':self.headers.get('Authorization')})+'\n')
+  response={'revision':5,'account':{'state':'signed_in','login':'Owner-1','message':'Ready'},
+   'repositories':[],'repository_page':2,'has_more':False,'busy':False,'can_mutate':True}
+  if creation:
+   response['creation']=dict(creation);response['creation'].update({
+    'repository_url':'https://github.com/Owner-1/new-repo','repository_id':'repo-42',
+    'default_branch':'main','state':'succeeded','message':'Created'})
+  data=json.dumps(response).encode();self.send_response(200);self.send_header('Content-Length',str(len(data)));self.end_headers();self.wfile.write(data)
  def do_POST(self):
+  global creation
   body=json.loads(self.rfile.read(int(self.headers['Content-Length'])))
   with open(sys.argv[1],'a') as f:f.write(json.dumps({'path':self.path,'auth':self.headers.get('Authorization'),'body':body})+'\n')
+  if body['action']=='create_repository' and body['name']=='rejected-repo':
+   data=json.dumps({'error':'stale repository creation request'}).encode();self.send_response(409);self.send_header('Content-Length',str(len(data)));self.end_headers();self.wfile.write(data);return
   if body['action']=='refresh_account':
    message='GitHub setup failed: '+('full diagnostic detail ' * 30)
    data=json.dumps({'error':message}).encode();self.send_response(400);self.send_header('Content-Length',str(len(data)));self.end_headers();self.wfile.write(data);return
@@ -263,6 +312,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
     'name_with_owner':body['expected_login']+'/'+body['name'],'visibility':body['visibility'],
     'default_branch':None,'state':'creating','message':'Creating'}
    response['busy']=True
+   creation=dict(response['creation'])
   data=json.dumps(response).encode();self.send_response(200);self.send_header('Content-Length',str(len(data)));self.end_headers();self.wfile.write(data)
  def log_message(self,*args):pass
 server=http.server.ThreadingHTTPServer(('127.0.0.1',0),Handler)
@@ -293,16 +343,26 @@ sys.stdout.buffer.write(server.server_port.to_bytes(4,'big'));sys.stdout.buffer.
     await model.createRepository(name: "new-repo", visibility: "private")
     #expect(model.snapshot?.creation?.state == "creating")
     #expect(model.snapshot?.creation?.nameWithOwner == "Owner-1/new-repo")
+    await model.refreshObservedState()
+    #expect(model.completedProjectHandoff?.project == "new-repo")
+    #expect(model.completedProjectHandoff?.baseBranch == "main")
     model.snapshot = try snapshot(revision: 4)
     await model.refreshAccount()
     #expect(model.error?.contains("full diagnostic detail full diagnostic detail") == true)
     #expect((model.error?.count ?? 0) > 300)
 
+    let rejected = DeveloperGitHubSetupModel(configurationPath: config.path)
+    rejected.snapshot = try snapshot(revision: 5)
+    await rejected.createRepository(name: "rejected-repo", visibility: "private")
+    #expect(!rejected.hasPendingProjectHandoff)
+    #expect(rejected.completedProjectHandoff == nil)
+    #expect(rejected.error?.contains("ready for an explicit retry") == true)
+
     let lines = try String(contentsOf: requests, encoding: .utf8).split(separator: "\n")
     let captured = try lines.map {
       try JSONSerialization.jsonObject(with: Data($0.utf8)) as! [String: Any]
     }
-    #expect(captured.count == 4)
+    #expect(captured.count == 7)
     #expect(captured.allSatisfy { $0["path"] as? String == "/github" })
     #expect(captured.allSatisfy { $0["auth"] as? String == "Bearer fixture-token" })
     let createBody = try #require(captured[2]["body"] as? [String: Any])
@@ -322,6 +382,9 @@ sys.stdout.buffer.write(server.server_port.to_bytes(4,'big'));sys.stdout.buffer.
     let model = DeveloperGitHubSetupModel(configurationPath: config.path)
     model.snapshot = try snapshot(busy: true)
     await model.refreshAccount()
+    #expect(model.error == "GitHub setup is busy or changed. Reload before continuing.")
+    await model.createRepository(name: "demo", visibility: "private")
+    #expect(!model.hasPendingProjectHandoff)
     #expect(model.error == "GitHub setup is busy or changed. Reload before continuing.")
   }
 }

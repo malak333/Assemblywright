@@ -18,9 +18,11 @@ Creation binds the confirmed account/name/visibility and immutable repository ID
 device challenges never authorize model actions. Cancellation or unknown credential
 and creation effects require truthful observation and operation-bound recovery.
 Repository creation does not publish project files or bypass publication checks.
-Selecting a discovered repository also grants no local filesystem effect. The owner
-must separately request creation of one simple, direct workspace directory against
-the exact runner revision while Developer and GitHub work are idle. Existing direct
+Using a discovered repository or completing its exact creation requests one simple,
+direct workspace directory against the fresh runner revision while Developer and
+GitHub work are idle. The handoff cannot infer success from an unrelated cached
+creation or save a publication connection. Failed handoffs expose a local retry
+without repeating repository creation. Existing direct
 directories are observed idempotently without overwrite; files, links, reparse
 points, nested names, and paths outside the configured workspace fail closed. The
 action does not clone, import, upload, connect, plan, enqueue, or start work. Stop,

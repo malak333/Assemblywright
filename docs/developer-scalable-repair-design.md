@@ -376,3 +376,17 @@ immutable validation and independent review.
 - Exact deployed Windows binary/source evidence and explicit recovery outcome.
   No hosted publication, signing, notarization, or production readiness is
   implied by local Developer evidence.
+
+
+### Repeated protected review rejection
+
+When a fully applied automatic staged candidate receives a terminal rejected
+review with protected findings, its exact cumulative candidate, terminal
+application receipt, ordered review binding, and validation evidence authorize
+a fresh staged repair opportunity under the already enabled owner policy.
+The scheduler must retain its process-level authorization while the durable
+feature lifecycle remains running; being an escalation predecessor alone does
+not revoke that policy. Source-only findings keep the ordinary successor route.
+Disabled policy, cancellation, nonrunning lifecycle, malformed receipts, or
+changed bytes cannot authorize either automatic route. The next staged proposal
+uses a new attempt reservation rather than replaying a terminal application.

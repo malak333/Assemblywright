@@ -1727,17 +1727,50 @@ fn rejected_review_repair_message(review: &ReviewAttemptEvidence) -> Result<Stri
     Ok(message)
 }
 
+enum TerminalStagedReviewRepairRoute {
+    Ordinary(String),
+    StagedAutomatic,
+}
+
+fn terminal_staged_review_repair_route(
+    feature: &Feature,
+    checkpoint: &str,
+    project: &Path,
+    candidate: &[Edit],
+) -> Result<TerminalStagedReviewRepairRoute> {
+    let review = terminal_failed_staged_review_rejection(feature, checkpoint, project, candidate)?;
+    if review_rejection_requires_staged_automatic(feature, checkpoint, project)? {
+        return Ok(TerminalStagedReviewRepairRoute::StagedAutomatic);
+    }
+    Ok(TerminalStagedReviewRepairRoute::Ordinary(
+        rejected_review_repair_message(review)?,
+    ))
+}
+
 fn source_only_terminal_staged_review_repair_message(
     feature: &Feature,
     checkpoint: &str,
     project: &Path,
     candidate: &[Edit],
 ) -> Result<Option<String>> {
-    let review = terminal_failed_staged_review_rejection(feature, checkpoint, project, candidate)?;
-    if review_rejection_requires_staged_automatic(feature, checkpoint, project)? {
-        return Ok(None);
+    match terminal_staged_review_repair_route(feature, checkpoint, project, candidate)? {
+        TerminalStagedReviewRepairRoute::Ordinary(message) => Ok(Some(message)),
+        TerminalStagedReviewRepairRoute::StagedAutomatic => Ok(None),
     }
-    Ok(Some(rejected_review_repair_message(review)?))
+}
+
+fn terminal_staged_review_continuation_authorized(
+    route: Option<&TerminalStagedReviewRepairRoute>,
+    auto_policy_enabled: bool,
+    auto_repair_lifecycle: &str,
+    cancelled: bool,
+) -> bool {
+    matches!(
+        route,
+        Some(TerminalStagedReviewRepairRoute::StagedAutomatic)
+    ) && auto_policy_enabled
+        && auto_repair_lifecycle == "running"
+        && !cancelled
 }
 
 const TERMINAL_STAGED_REVIEW_RESUME_DEFECT_PREFIX: &str =
@@ -9385,10 +9418,10 @@ impl Engine {
                             )?;
                         }
                     }
-                    let terminal_source_only_repair = if let Some(project) =
+                    let terminal_staged_review_route = if let Some(project) =
                         terminal_staged_review_project.as_deref()
                     {
-                        match source_only_terminal_staged_review_repair_message(
+                        match terminal_staged_review_repair_route(
                             current,
                             &current.checkpoint,
                             project,
@@ -9396,7 +9429,7 @@ impl Engine {
                                 "Terminal staged rejection has no cumulative candidate",
                             )?,
                         ) {
-                            Ok(message) => message,
+                            Ok(route) => Some(route),
                             Err(error) => {
                                 terminal_staged_review_invalid = Some(format!("{error:#}"));
                                 if current.auto_repair_lifecycle == "running" {
@@ -9412,9 +9445,18 @@ impl Engine {
                     } else {
                         None
                     };
-                    if review_rejection && !self.cancelled() {
-                        self.repair_loop_authorized
-                            .store(!escalation_attempt, Ordering::SeqCst);
+                    if review_rejection {
+                        let staged_continuation =
+                            terminal_staged_review_continuation_authorized(
+                                terminal_staged_review_route.as_ref(),
+                                auto_policy_enabled,
+                                &current.auto_repair_lifecycle,
+                                self.cancelled(),
+                            );
+                        self.repair_loop_authorized.store(
+                            (!escalation_attempt && !self.cancelled()) || staged_continuation,
+                            Ordering::SeqCst,
+                        );
                     }
                     let starts_early_staged_review = early_staged_review_selected
                         && auto_policy_enabled
@@ -9428,13 +9470,21 @@ impl Engine {
                             )?;
                         }
                         Ok(false)
-                    } else if terminal_source_only_repair.is_some()
+                    } else if matches!(
+                        terminal_staged_review_route.as_ref(),
+                        Some(TerminalStagedReviewRepairRoute::Ordinary(_))
+                    )
                         && auto_policy_enabled
                         && current.auto_repair_lifecycle == "running"
                         && !self.cancelled()
                         && current.repair_attempts < REPAIR_LIMIT
                     {
-                        current.message = terminal_source_only_repair.unwrap();
+                        let Some(TerminalStagedReviewRepairRoute::Ordinary(message)) =
+                            terminal_staged_review_route
+                        else {
+                            unreachable!("ordinary terminal route was checked above");
+                        };
+                        current.message = message;
                         reserve_repair_attempt(current)?;
                         Ok(true)
                     } else if !starts_early_staged_review
@@ -24262,6 +24312,54 @@ mod tests {
         assert!(fully_applied_staged_validation_binding(&feature)
             .unwrap()
             .is_none());
+    }
+
+    #[test]
+    fn protected_terminal_staged_review_continuation_requires_live_authority() {
+        let (_directory, engine) = control_test_engine();
+        let project = engine.root.join("example");
+        let mut feature = terminal_staged_source_rejection_fixture(&engine);
+        feature.review_history.last_mut().unwrap().blocking_findings[0].path =
+            "tests/test_first.py".into();
+
+        let route = terminal_staged_review_repair_route(
+            &feature,
+            &feature.checkpoint,
+            &project,
+            feature.edits.as_deref().unwrap(),
+        )
+        .unwrap();
+        assert!(matches!(
+            route,
+            TerminalStagedReviewRepairRoute::StagedAutomatic
+        ));
+        assert!(terminal_staged_review_continuation_authorized(
+            Some(&route),
+            true,
+            "running",
+            false,
+        ));
+        assert!(!terminal_staged_review_continuation_authorized(
+            Some(&route),
+            false,
+            "running",
+            false,
+        ));
+        assert!(!terminal_staged_review_continuation_authorized(
+            Some(&route),
+            true,
+            "held",
+            false,
+        ));
+        assert!(!terminal_staged_review_continuation_authorized(
+            Some(&route),
+            true,
+            "running",
+            true,
+        ));
+        assert!(!terminal_staged_review_continuation_authorized(
+            None, true, "running", false,
+        ));
     }
 
     #[test]

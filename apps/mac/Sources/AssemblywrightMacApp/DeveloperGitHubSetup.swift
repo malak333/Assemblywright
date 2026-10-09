@@ -104,6 +104,43 @@ struct DeveloperGitHubCreation: Decodable, Equatable {
   }
 }
 
+struct DeveloperGitHubProjectHandoffExpectation: Equatable {
+  let operationID: UUID
+  let expectedLogin: String
+  let name: String
+  let visibility: String
+}
+
+struct DeveloperGitHubProjectHandoff: Equatable, Identifiable {
+  let operationId: String
+  let project: String
+  let repositoryURL: String
+  let baseBranch: String
+
+  var id: String { operationId }
+}
+
+enum DeveloperGitHubSetupHandoff {
+  static func resolve(_ creation: DeveloperGitHubCreation?,
+    expected: DeveloperGitHubProjectHandoffExpectation) -> DeveloperGitHubProjectHandoff? {
+    guard let creation, creation.state == "succeeded",
+      creation.operationId == expected.operationID.uuidString.lowercased(),
+      creation.visibility == expected.visibility,
+      let identity = creation.verifiedRepositoryIdentity,
+      identity.owner.caseInsensitiveCompare(expected.expectedLogin) == .orderedSame,
+      identity.name.caseInsensitiveCompare(expected.name) == .orderedSame,
+      let repositoryURL = creation.repositoryUrl,
+      let canonicalURL = DeveloperGitHubURL.repository(repositoryURL),
+      let baseBranch = creation.defaultBranch,
+      DeveloperGitHubPresentation.validBaseBranch(baseBranch),
+      let project = DeveloperGitHubPresentation.suggestedLocalProjectName(
+        repositoryURL: canonicalURL.absoluteString)
+    else { return nil }
+    return DeveloperGitHubProjectHandoff(operationId: creation.operationId, project: project,
+      repositoryURL: canonicalURL.absoluteString, baseBranch: baseBranch)
+  }
+}
+
 struct DeveloperGitHubSetupSnapshot: Decodable, Equatable {
   let revision: UInt64
   let account: DeveloperGitHubAccount
@@ -269,9 +306,12 @@ final class DeveloperGitHubSetupModel: ObservableObject {
   @Published var repositories: [DeveloperGitHubRepository] = []
   @Published var error: String?
   @Published var sending = false
+  @Published private(set) var completedProjectHandoff: DeveloperGitHubProjectHandoff?
   private let configurationPath: String
   private let observationSession: URLSession
   private let mutationSession: URLSession
+  private var pendingProjectHandoff: DeveloperGitHubProjectHandoffExpectation?
+  private var lastMutationWasDefinitivelyRejected = false
 
   init(configurationPath: String) {
     self.configurationPath = configurationPath
@@ -285,13 +325,17 @@ final class DeveloperGitHubSetupModel: ObservableObject {
 
   func observe() async {
     while !Task.isCancelled {
-      do {
-        let value = try await request(session: observationSession)
-        guard value.isWellFormed else { throw responseError() }
-        if !sending && value.revision >= (snapshot?.revision ?? 0) { acceptObserved(value) }
-      } catch { self.error = error.localizedDescription }
+      await refreshObservedState()
       try? await Task.sleep(for: .milliseconds(800))
     }
+  }
+
+  func refreshObservedState() async {
+    do {
+      let value = try await request(session: observationSession)
+      guard value.isWellFormed else { throw responseError() }
+      if !sending && value.revision >= (snapshot?.revision ?? 0) { acceptObserved(value) }
+    } catch { self.error = error.localizedDescription }
   }
 
   func refreshAccount() async {
@@ -350,13 +394,28 @@ final class DeveloperGitHubSetupModel: ObservableObject {
   func createRepository(name: String, visibility: String) async {
     guard let login = snapshot?.account.login, snapshot?.account.isSignedIn == true,
       DeveloperGitHubSetupValidation.validRepositoryName(name),
-      ["private", "public"].contains(visibility) else { return }
+      ["private", "public"].contains(visibility), pendingProjectHandoff == nil,
+      !sending, snapshot?.canMutate == true, snapshot?.busy == false else {
+      if pendingProjectHandoff != nil {
+        error = "Finish or reconcile the current repository creation before starting another."
+      } else if sending || snapshot?.canMutate != true || snapshot?.busy != false {
+        error = "GitHub setup is busy or changed. Reload before continuing."
+      }
+      return
+    }
     let expectedRevision = revision, operationID = UUID()
+    pendingProjectHandoff = DeveloperGitHubProjectHandoffExpectation(operationID: operationID,
+      expectedLogin: login, name: name, visibility: visibility)
+    completedProjectHandoff = nil
     await mutate(DeveloperGitHubSetupRequest.create(operationID: operationID,
       expectedLogin: login, name: name, visibility: visibility, revision: expectedRevision)) {
         DeveloperGitHubSetupAcknowledgement.create($0, operationID: operationID,
           expectedLogin: login, name: name, visibility: visibility, after: expectedRevision)
-      }
+      } accept: { self.considerProjectHandoff($0.creation) }
+    if pendingProjectHandoff?.operationID == operationID, let creationError = error {
+      await recoverPendingProjectHandoff(operationID: operationID, creationError: creationError,
+        definitivelyRejected: lastMutationWasDefinitivelyRejected)
+    }
   }
 
   func reconcileCreation() async {
@@ -366,8 +425,15 @@ final class DeveloperGitHubSetupModel: ObservableObject {
       revision: expectedRevision)) {
         DeveloperGitHubSetupAcknowledgement.reconcileCreation($0,
           expected: creation, after: expectedRevision)
-      }
+      } accept: { self.considerProjectHandoff($0.creation) }
   }
+
+  func consumeCompletedProjectHandoff(_ operationID: String) {
+    guard completedProjectHandoff?.operationId == operationID else { return }
+    completedProjectHandoff = nil
+  }
+
+  var hasPendingProjectHandoff: Bool { pendingProjectHandoff != nil }
 
   private var revision: UInt64 { snapshot?.revision ?? 0 }
 
@@ -381,6 +447,7 @@ final class DeveloperGitHubSetupModel: ObservableObject {
       return
     }
     sending = true
+    lastMutationWasDefinitivelyRejected = false
     defer { sending = false }
     do {
       let value = try await request(body: body, session: mutationSession)
@@ -388,14 +455,56 @@ final class DeveloperGitHubSetupModel: ObservableObject {
       let oldAccount = snapshot?.account
       snapshot = value
       if oldAccount != value.account { repositories = [] }
-      accept?(value)
       error = nil
-    } catch { self.error = error.localizedDescription }
+      accept?(value)
+    } catch {
+      let failure = error as NSError
+      if let status = failure.userInfo["HTTPStatus"] as? Int, (400..<500).contains(status) {
+        lastMutationWasDefinitivelyRejected = true
+      }
+      self.error = error.localizedDescription
+    }
   }
 
   private func acceptObserved(_ value: DeveloperGitHubSetupSnapshot) {
     if snapshot?.account != value.account { repositories = [] }
     snapshot = value
+    considerProjectHandoff(value.creation)
+  }
+
+  private func considerProjectHandoff(_ creation: DeveloperGitHubCreation?) {
+    guard let expected = pendingProjectHandoff, let creation,
+      creation.operationId == expected.operationID.uuidString.lowercased() else { return }
+    if let handoff = DeveloperGitHubSetupHandoff.resolve(creation, expected: expected) {
+      completedProjectHandoff = handoff
+      pendingProjectHandoff = nil
+    } else if ["existing", "absent"].contains(creation.state) {
+      pendingProjectHandoff = nil
+    } else if creation.state == "succeeded" {
+      pendingProjectHandoff = nil
+      error = "GitHub reported success, but its exact repository identity could not be verified. Reload before retrying the local project handoff."
+    }
+  }
+
+  private func recoverPendingProjectHandoff(operationID: UUID, creationError: String,
+    definitivelyRejected: Bool) async {
+    do {
+      let observed = try await request(session: observationSession)
+      guard observed.isWellFormed, observed.revision >= (snapshot?.revision ?? 0) else {
+        throw responseError()
+      }
+      acceptObserved(observed)
+      if pendingProjectHandoff?.operationID == operationID,
+        observed.creation?.operationId != operationID.uuidString.lowercased(), !observed.busy,
+        definitivelyRejected {
+        pendingProjectHandoff = nil
+        error = "\(creationError) Windows confirmed that repository creation was not admitted. Reloaded state is ready for an explicit retry."
+      } else if pendingProjectHandoff?.operationID == operationID {
+        error = "\(creationError) Windows has not confirmed the creation result. Wait for the operation or reconcile it; do not create the repository again."
+      }
+    } catch {
+      self.error = "\(creationError) Windows could not verify whether creation started. Wait for the operation to appear or reconcile it; do not create the repository again."
+    }
   }
 
   private func request(body: [String: Any]? = nil, session: URLSession) async throws
@@ -415,11 +524,13 @@ final class DeveloperGitHubSetupModel: ObservableObject {
       request.httpBody = try JSONSerialization.data(withJSONObject: body)
     }
     let (data, response) = try await session.data(for: request)
-    guard let response = response as? HTTPURLResponse, response.statusCode == 200 else {
+    guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
       let detail = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+      var info: [String: Any] = [NSLocalizedDescriptionKey: detail?["error"] as? String
+        ?? "Windows could not complete GitHub setup."]
+      if let status = (response as? HTTPURLResponse)?.statusCode { info["HTTPStatus"] = status }
       throw NSError(domain: "Developer GitHub setup", code: 2,
-        userInfo: [NSLocalizedDescriptionKey: detail?["error"] as? String
-          ?? "Windows could not complete GitHub setup."])
+        userInfo: info)
     }
     let decoder = JSONDecoder()
     decoder.keyDecodingStrategy = .convertFromSnakeCase

@@ -293,6 +293,13 @@ struct DeveloperGitHubTests {
       expectedRevision: 8, project: "aw-demo-3"))
     #expect(!DeveloperGitHubAcknowledgement.createdLocalProject(created,
       expectedRevision: 9, project: "other"))
+    let existingDifferentCase = try decodeSnapshot(revision: 9, localProjects: ["Demo"])
+    #expect(DeveloperGitHubAcknowledgement.createdLocalProjectName(existingDifferentCase,
+      expectedRevision: 9, project: "demo") == "Demo")
+    let ambiguousDifferentCase = try decodeSnapshot(revision: 9,
+      localProjects: ["Demo", "DEMO"])
+    #expect(DeveloperGitHubAcknowledgement.createdLocalProjectName(ambiguousDifferentCase,
+      expectedRevision: 9, project: "demo") == nil)
     let abandoned = try decodeSnapshot(unresolved: false, revision: 10,
       includeFeature: false)
     #expect(DeveloperGitHubAcknowledgement.abandoned(abandoned,
@@ -317,6 +324,10 @@ struct DeveloperGitHubTests {
       repositoryURL: "https://github.com/owner/demo.site") == "demo-site")
     #expect(DeveloperGitHubPresentation.suggestedLocalProjectName(
       repositoryURL: "https://github.com.evil.test/owner/demo") == nil)
+    #expect(DeveloperGitHubPresentation.canonicalLocalProjectName("pending-project",
+      projects: ["demo"]) == nil)
+    #expect(DeveloperGitHubPresentation.canonicalLocalProjectName("demo",
+      projects: ["Demo"]) == "Demo")
   }
 
   @Test @MainActor
@@ -336,13 +347,17 @@ snapshot={'mode':'supervised_developer','host':'fixture','workspace_root':'/fixt
  'github_publication_unresolved':False,'can_manage_github_connections':True,'github_connections':[],
  'local_projects':['demo']}
 class Handler(http.server.BaseHTTPRequestHandler):
+ def do_GET(self):
+  with open(sys.argv[1],'a') as f:f.write(json.dumps({'path':self.path,'authorization':self.headers.get('Authorization')})+'\n')
+  data=json.dumps(snapshot).encode();self.send_response(200);self.send_header('Content-Length',str(len(data)));self.end_headers();self.wfile.write(data)
  def do_POST(self):
   body=json.loads(self.rfile.read(int(self.headers['Content-Length'])))
   with open(sys.argv[1],'a') as f:f.write(json.dumps({'path':self.path,'authorization':self.headers.get('Authorization'),'body':body})+'\n')
   response=dict(snapshot)
   response['revision']=body['expected_revision']+1
   if body['action']=='create_project':
-   response['local_projects']=sorted(set(response['local_projects']+[body['project']]))
+   project='AW-DEMO-3' if body['project']=='aw-demo-3' else body['project']
+   response['local_projects']=sorted(set(response['local_projects']+[project]))
   elif body['action']=='save_connection':
    response['github_connections']=[{'project':body['project'],'repository_url':body['repository_url'],'base_branch':body['base_branch'],'automatic_merge':True}]
   elif body['action']=='reconcile':
@@ -374,9 +389,10 @@ sys.stdout.buffer.write(server.server_port.to_bytes(4,'big'));sys.stdout.buffer.
     ]).write(to: config)
     let model = DeveloperRunnerModel(configurationPath: config.path)
     model.snapshot = try decodeSnapshot()
-    try await model.createLocalProject("aw-demo-3", expectedRevision: 9)
+    let confirmedProject = try await model.createLocalProject("aw-demo-3", expectedRevision: 9)
+    #expect(confirmedProject == "AW-DEMO-3")
     try await model.saveGitHubConnection(project: "demo",
-      repositoryURL: "https://github.com/owner/demo", baseBranch: "main", expectedRevision: 10)
+      repositoryURL: "https://github.com/owner/demo", baseBranch: "main", expectedRevision: 11)
     model.snapshot = try decodeSnapshot()
     try await model.disconnectGitHub(project: "demo", expectedRevision: 9)
     let decoder = JSONDecoder()
@@ -397,10 +413,15 @@ sys.stdout.buffer.write(server.server_port.to_bytes(4,'big'));sys.stdout.buffer.
     let captured = try lines.map {
       try JSONSerialization.jsonObject(with: Data($0.utf8)) as! [String: Any]
     }
-    #expect(captured.count == 5)
-    #expect(captured.allSatisfy { $0["path"] as? String == "/publication" })
+    #expect(captured.count == 6)
+    #expect(captured[0]["path"] as? String == "/status")
+    #expect(captured.dropFirst().allSatisfy { $0["path"] as? String == "/publication" })
     #expect(captured.allSatisfy { $0["authorization"] as? String == "Bearer fixture-token" })
-    let actions = try captured.map { try #require($0["body"] as? [String: Any])["action"] as? String }
+    let actions = try captured.dropFirst().map {
+      try #require($0["body"] as? [String: Any])["action"] as? String
+    }
     #expect(actions == ["create_project", "save_connection", "disconnect", "reconcile", "abandon"])
+    let createBody = try #require(captured[1]["body"] as? [String: Any])
+    #expect(createBody["expected_revision"] as? UInt64 == 10)
   }
 }

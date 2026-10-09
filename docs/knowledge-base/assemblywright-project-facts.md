@@ -2,8 +2,9 @@
 
 ## GitHub selection and local Developer projects
 
-- A GitHub repository selection fills connection details; it does not create a
-  Windows Developer project by itself.
+- GitHub discovery and Windows `local_projects` are distinct catalogs. Using a
+  GitHub repository now registers its empty local project and preserves connection
+  details; exact successful new-repository creation performs the same handoff.
 - The GitHub publication dialog can explicitly create one empty direct directory
   under the configured Windows workspace using a simple 80-character ASCII project
   name. This action does not clone, import, upload, connect, plan, enqueue, or start.
@@ -13,6 +14,11 @@
 - Creation is exact-revision and idle-gated, observes an existing direct directory
   idempotently without overwrite, and rejects files, links, Windows reparse points,
   nested names, and paths outside the workspace.
+- The October 8 `aw-fft-demo6` report reproduced a missing handoff: GitHub creation
+  had a successful immutable-ID receipt, but the Windows project directory was
+  absent. Registering it through authenticated `create_project` added it to the
+  status and chat catalogs without changing retained queue items. A local handoff
+  creates no publication connection and publishes no files.
 
 ## Global permissions and Assembly Line navigation
 
@@ -3579,3 +3585,15 @@ consistency.
   320px enlarged text overflow remains recorded. This local-only job had no
   GitHub publication binding at its original start. See
   [retained completion and recovery evidence](../developer-review-transport-validation.md).
+
+
+### Protected review after automatic staged repair
+
+- An exact terminal rejection after staged repair can still contain protected
+  test findings. Clearing the process-level repair authorization because the
+  previous attempt was an escalation strands the queue with durable lifecycle
+  `running`. Validate the complete terminal candidate/review/validation binding,
+  distinguish ordinary-source and staged-protected routes, and retain automatic
+  continuation only under the current enabled policy, running lifecycle, and
+  uncancelled epoch. Every next staged attempt reserves new evidence and still
+  validates and reviews fresh bytes. See [handoff and continuation evidence](../developer-project-handoff-validation.md).

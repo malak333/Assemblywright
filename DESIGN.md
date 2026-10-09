@@ -16,11 +16,13 @@ The owner requested Developer GitHub sign-in, repository discovery, and explicit
 repository creation after a saved Windows login became invalid. The accepted
 [`Developer GitHub setup`](docs/developer-github-setup-design.md) extends the earlier
 publication design with a device-authorization flow, repository picker, and
-account/name/visibility-bound creation. A selected repository may also supply the
-suggested name for one explicit empty local Windows workspace directory. That
+account/name/visibility-bound creation. Using a repository or completing an exact
+new-repository creation registers its empty local Windows project, making it
+available to the feature and chat pickers. That
 create-only action is revision-bound, serialized with GitHub and Developer work,
 and rejects files, links, reparse points, nested names, and paths outside the
-workspace. It performs no clone, import, upload, connection save, or feature start.
+workspace. Saving a publication connection remains separate; the project handoff
+performs no clone, import, upload, connection save, or feature start.
 Setup does not relax feature review, protected-check, or merge requirements.
 
 The owner approved automatic GitHub publication for connected Developer projects:
