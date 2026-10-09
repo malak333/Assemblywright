@@ -188,6 +188,42 @@ real local model health was `ok`, and demo6 retained `succeeded` /
 source archive, so these digests establish its source/binary identity; it has no
 Git HEAD claim.
 
+## Fresh uninterrupted real-model completion
+
+After the final `c467...` installation, a separate bounded feature
+`18087476-4737-418e-8e4d-a44396c8a0ca` in
+`aw-autonomous-completion-20261009` implemented a usable standard-library Python
+temperature conversion library. Real Codex planning produced the approved plan
+`78fea7d3a451fb621b5a6ca4cdcadb00d17480d6f1f8015e68dc11b08d9ae28a`.
+From the approved queued state, the parent issued one public Start. Windows Qwen
+implemented the files; the original `python -B -m unittest discover -s tests -v`
+passed 45 tests; real Codex review approved the exact candidate; the application
+reached `succeeded` / `review_1_approved`. It used zero ordinary repairs and zero
+escalations. There was no Resume, service restart, or parent file edit after Start.
+
+Read-only export verified every delivered byte against retained reviewed edits,
+and the feature state was unchanged during export. All other 26 queue entries
+matched the pre-install backup. SQLite integrity, installed source/binary hashes,
+and real local-model health remained valid.
+
+| Path | SHA-256 |
+| --- | --- |
+| `README.md` | `d71eee75965def64ce0c1a41ef0e98729de0ad5613a30508ea52b71c70230b5e` |
+| `temperatures.py` | `8f46bc67ad59592b75f4cac56b1bed8acae6e2d2eeee3d313611ea7ce9340ff7` |
+| `tests/test_temperatures.py` | `8fb25f75ed41e3b18ac9ae637181a82849e9559577980e12078817671012b069` |
+
+Validation-log SHA-256:
+`aa79e87ac84f6b55006724cee881c016b6acffd9a9962ede44b2a1032cf142c7`.
+The approved review packet and decision are
+`014261f5e55bff72665aede958a24b0f43292f4a0254b63804bb8271d11cd23b`
+and `7290c862843942429363499c262a618fa52f57ac8647b5ccccade5bbff71e4b6`.
+Two nonblocking observations remain: the extreme Fahrenheit test uses `1e15`
+rather than a value near the float limit, and a README fractional example shows
+`25.5` rather than the approximate unrounded representation. The delivered
+implementation handles large finite Fahrenheit values correctly; these selected
+test/documentation limitations remain recorded. This proof is local-only under
+its approved selection and separate from GitHub source publication.
+
 ## Canonical validation and publication boundary
 
 The canonical `./scripts/release-local.sh` passed at 04:02:04 UTC on October 9
