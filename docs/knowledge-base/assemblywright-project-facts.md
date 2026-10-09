@@ -2326,6 +2326,20 @@ Full-machine target phase: planning/creation containment has bounded native Wind
   call to `Continue`, redirect all streams to the private bounded log, capture
   `$LASTEXITCODE`, and restore the global fail-closed preference by leaving the
   child scope. Only the captured zero exit code can authorize the next step.
+- The pinned Developer OpenCode tool adapter has the same native-stderr boundary
+  for Python test progress. Staged Windows guidance uses a child-scope
+  `Continue`, `2>&1 | ForEach-Object { "$_" }`, an immediately captured native
+  exit code, and missing/nonzero-code propagation. Stringification keeps merged
+  `NativeCommandError` records on ordinary output. The actual Windows probe
+  preserves native exit zero and seven; do not accept a provider `state:error`
+  event as successful or infer success from an `OK` string. The runner's
+  immutable validation command and tool-event failure parser remain unchanged.
+- A source-path review finding can require a regression assertion even though
+  its own path is not a protected input. If ordinary repair then changes a
+  protected test, retain its typed rejection and exact repair-history review
+  checkpoint for direct combined automatic preparation. Do not match review
+  prose, reset attempts, apply the rejected bytes, or accept missing/stale review
+  evidence. Validation-only predecessors retain their existing bounded route.
 - Feature 5 removes its private transcript after hashing and atomically retains
   only owner-private path-free schema-v2 receipt/raw-digest files. Its self-test
   covers stale invalidation, dirty/wrong/stale/hidden Git state, hostile output,
@@ -3516,3 +3530,52 @@ consistency.
 - Completion means terminal `succeeded` / `publication_merged`, exact-head required-check success, and independently verified remote blobs matching the frozen reviewed candidate. Website PR #5 merged at `4166c95da840f3111471ab979b601b71eea31ffb`; all four delivered file hashes and immutable CI metadata matched. See [runtime recovery and completion evidence](../developer-codex-runtime-recovery-validation.md).
 - Preserve earlier held/abandoned features as failure evidence. A corrected restart can prove downstream autonomous completion without implying the original start or every earlier attempt succeeded.
 - Concept-based factual tests provide selected corruption guards, not complete language interpretation. Retain nonblocking alternative-wording and unused-API hardening findings when the actual delivered source is correct; do not misrepresent selected mutation passes as exhaustive coverage.
+
+
+## Review transport reliability
+
+- A generic structured-output schema can accept a digest-shaped value that does
+  not match the host's candidate. Asking the reviewer to copy opaque hashes and
+  ordered manifests introduces an avoidable failure between completed validation
+  and independent review.
+- Reviewer decisions and findings are model output; immutable receipt metadata
+  is constructed by Windows from the exact canonical tool-free invocation input.
+  This preserves persisted receipt compatibility, every batch/aggregate decision,
+  rejection propagation, and current-byte checks without trusting model-generated
+  identity fields.
+- Passing project tests establishes only those assertions. Website browser
+  acceptance and truthful recorded verification remain separate from transport
+  and independent review.
+- Tool-based staged repair uses OpenCode and does not inherit the direct-HTTP
+  `enable_thinking=false` setting. An empty stage mutation ledger can hold a
+  repair even after a successful provider session. For the installed Qwen
+  runtime, a supported llama.cpp reasoning budget of 4,096 tokens bounds that
+  phase; verify the exact executable/weights and loopback ownership before
+  changing provider configuration. Prove a completed disposable file tool action
+  before resuming the retained feature. An SSH-child launch may disappear when
+  SSH exits, so confirm process persistence in a separate connection. See
+  [the installed recovery record](../developer-review-transport-validation.md).
+
+
+### Retained pipeline completion proof (2026-10-08)
+
+- The retained `aw-fft-demo5` job reached `succeeded` /
+  `review_18_approved` after its original Windows command passed 54 tests.
+  The application completed the final repair cycles without another owner Resume
+  or parent edits to the website. Three ordinary attempts, fourteen escalation
+  attempts, and eighteen reviews remain in durable history.
+- Count escalation attempts separately from successful applications; the empty
+  fifth preparation remained failure evidence. A corrected retained run can
+  prove downstream completion without implying its original start was
+  uninterrupted.
+- Source/path-only review feedback can also request a protected regression
+  assertion. The ordinary tool boundary can reject that candidate while
+  retaining cumulative edits from earlier accepted work. Route the typed
+  rejection to combined staging only after checking prior edit identity, live
+  bytes, and exact rejected-review aggregate/ordered batch digests; an empty-edit
+  guard incorrectly excludes the actual recovery state.
+- Preserve nonblocking review observations and explicit browser limitations.
+  The final 1280px/375px Chrome checks and computed screen/print contrast passed;
+  320px enlarged text overflow remains recorded. This local-only job had no
+  GitHub publication binding at its original start. See
+  [retained completion and recovery evidence](../developer-review-transport-validation.md).

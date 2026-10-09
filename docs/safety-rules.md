@@ -87,7 +87,13 @@ the only exception: a separate persistent owner policy may authorize serial auto
 repairs for the first failed feature within its snapshotted cumulative limit.
 Automatic repair keeps the validation command immutable, requires fresh independent
 Codex review, rejects prohibited paths and secret-bearing material, and quarantines
-ambiguous effects. Changed bytes or stale state invalidate either authorization.
+ambiguous effects.
+The tool-free batched reviewer supplies only a semantic judgment. Windows binds that
+judgment to the exact disclosed input and constructs immutable receipt metadata;
+model-generated metadata cannot change candidate identity, file order, validation
+evidence, provider, or reviewer selection. This creates no approval: every batch
+and aggregate must independently approve, and all findings and current-byte
+checks retain their existing constraints. Changed bytes or stale state invalidate either authorization.
 See also [`developer-chat-repair-design.md`](developer-chat-repair-design.md).
 Supported staged automatic-failure text deletions require snapshotted Full access,
 complete admitted prior text and its exact hash, explicit operation-bound review,

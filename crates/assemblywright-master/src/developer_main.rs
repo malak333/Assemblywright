@@ -1523,6 +1523,91 @@ fn review_rejection_requires_staged_automatic(
         .any(|finding| is_protected_repair_input(&finding.path, &validation_paths)))
 }
 
+fn validate_rejected_staged_candidate_retained_edits(feature: &Feature) -> Result<()> {
+    let repair = feature
+        .repair_history
+        .last()
+        .filter(|repair| repair.attempt == feature.repair_attempts)
+        .context("Rejected staged candidate has no exact prior repair evidence")?;
+    let current_edits = feature.edits.as_deref().unwrap_or_default();
+    if current_edits.len() != repair.prior_edits.len() {
+        bail!("Rejected staged candidate changed the retained cumulative edit count");
+    }
+    for (current, prior) in current_edits.iter().zip(&repair.prior_edits) {
+        validate_sha256(
+            &prior.content_hash,
+            "rejected staged candidate prior edit digest",
+        )?;
+        if current.path != prior.path
+            || current.before != prior.before
+            || edit_sha256(current)? != prior.content_hash
+        {
+            bail!("Rejected staged candidate changed retained cumulative edit identity");
+        }
+    }
+    Ok(())
+}
+
+fn automatic_staged_review_required(
+    feature: &Feature,
+    checkpoint: &str,
+    project: &Path,
+) -> Result<bool> {
+    if feature.last_failure_kind == "candidate_rejection"
+        && feature.checkpoint == "staged_tool_candidate_rejected"
+    {
+        let linked_checkpoint = automatic_staged_review_checkpoint(feature)
+            .context("Rejected staged candidate has no exact rejected-review linkage")?;
+        if linked_checkpoint != checkpoint {
+            bail!("Rejected staged candidate review linkage changed");
+        }
+        validate_rejected_staged_candidate_retained_edits(feature)?;
+        let rejected_review_checkpoint = checkpoint
+            .strip_prefix("review_")
+            .and_then(|value| value.strip_suffix("_rejected"))
+            .is_some();
+        let review = validated_rejected_review_for_checkpoint(feature, checkpoint)?;
+        if review.is_none() {
+            if rejected_review_checkpoint {
+                bail!("Rejected staged candidate checkpoint has no rejected-review evidence");
+            }
+            return Ok(false);
+        }
+        let review = review.unwrap();
+        validate_current_review_edits(feature.edits.as_deref().unwrap_or_default(), project)?;
+        let packet = developer_review_batch_set(
+            feature,
+            project,
+            feature.edits.as_deref().unwrap_or_default(),
+            &review.validation_evidence_sha256,
+        )?;
+        let batch_packet_sha256s = packet
+            .batches
+            .iter()
+            .map(|batch| batch.sha256())
+            .collect::<Result<Vec<_>>>()?;
+        if packet.aggregate_sha256() != review.packet_sha256
+            || batch_packet_sha256s != review.batch_packet_sha256s
+        {
+            bail!("Rejected staged candidate no longer matches its exact reviewed predecessor");
+        }
+        return Ok(true);
+    }
+    review_rejection_requires_staged_automatic(feature, checkpoint, project)
+}
+
+fn automatic_staged_review_required_in_workspace(
+    workspace: &Path,
+    feature: &Feature,
+    checkpoint: &str,
+) -> Result<bool> {
+    let project = fs::canonicalize(workspace.join(&feature.project))?;
+    if !project.starts_with(workspace) {
+        bail!("Project escapes the workspace root");
+    }
+    automatic_staged_review_required(feature, checkpoint, &project)
+}
+
 fn review_rejection_requires_staged_automatic_in_workspace(
     workspace: &Path,
     feature: &Feature,
@@ -1547,8 +1632,12 @@ fn automatic_staged_review_checkpoint(feature: &Feature) -> Option<&str> {
         return Some(feature.checkpoint.as_str());
     }
     if feature.last_failure_kind == "candidate_rejection"
-        && feature.checkpoint == "staged_tool_candidate_quarantined"
-        && feature.edits.is_none()
+        && matches!(
+            feature.checkpoint.as_str(),
+            "staged_tool_candidate_rejected" | "staged_tool_candidate_quarantined"
+        )
+        && (feature.checkpoint == "staged_tool_candidate_rejected" || feature.edits.is_none())
+        && feature.review_pending.is_none()
         && feature.repair_history.len() == feature.repair_attempts as usize
     {
         return feature.repair_history.last().and_then(|evidence| {
@@ -6548,7 +6637,7 @@ impl Engine {
                 let checkpoint = automatic_staged_review_checkpoint(&observed).context(
                     "Ordinary repair attempts must be exhausted before automatic escalation",
                 )?;
-                review_rejection_requires_staged_automatic(&observed, checkpoint, &project)?
+                automatic_staged_review_required(&observed, checkpoint, &project)?
             } else {
                 false
             };
@@ -6619,7 +6708,7 @@ impl Engine {
                     "Ordinary repair attempts must be exhausted before automatic escalation",
                 )?;
                 if !early_staged_review
-                    || !review_rejection_requires_staged_automatic(feature, checkpoint, &project)?
+                    || !automatic_staged_review_required(feature, checkpoint, &project)?
                 {
                     bail!("Ordinary repair attempts must be exhausted before automatic escalation");
                 }
@@ -8919,12 +9008,53 @@ impl Engine {
                     .store(policy_enabled, Ordering::SeqCst);
             }
             let feature = self.freeze_feature_publication(feature)?;
-            let early_staged_review = if feature.repair_attempts < REPAIR_LIMIT {
-                match automatic_staged_review_checkpoint(&feature) {
-                    Some(checkpoint) => review_rejection_requires_staged_automatic_in_workspace(
+            let automatic_route_admitted =
+                !self.cancelled() && self.repair_loop_authorized.load(Ordering::SeqCst);
+            let early_staged_review = if feature.repair_attempts < REPAIR_LIMIT
+                && automatic_route_admitted
+            {
+                let required = match automatic_staged_review_checkpoint(&feature) {
+                    Some(checkpoint) => automatic_staged_review_required_in_workspace(
                         &self.root, &feature, checkpoint,
-                    )?,
-                    None => false,
+                    ),
+                    None if feature.last_failure_kind == "candidate_rejection"
+                        && feature.checkpoint == "staged_tool_candidate_rejected" =>
+                    {
+                        Err(anyhow!(
+                            "Rejected staged candidate has no exact rejected-review linkage"
+                        ))
+                    }
+                    None => Ok(false),
+                };
+                match required {
+                    Ok(required) => required,
+                    Err(error) if feature.last_failure_kind == "candidate_rejection" => {
+                        self.change(|state| {
+                            let current = state
+                                .queue
+                                .iter_mut()
+                                .find(|candidate| candidate.id == feature.id)
+                                .context("feature missing")?;
+                            if current.status == "failed"
+                                && current.auto_repair_lifecycle == "running"
+                                && current.last_failure_kind == "candidate_rejection"
+                                && current.checkpoint == feature.checkpoint
+                                && current.repair_attempts == feature.repair_attempts
+                                && current.review_attempts == feature.review_attempts
+                            {
+                                set_auto_repair_lifecycle(
+                                    current,
+                                    "held",
+                                    "Automatic repair stopped because the rejected staged candidate has malformed, stale, or incomplete rejected-review linkage. Inspect the durable evidence before explicitly resuming.",
+                                )?;
+                            }
+                            Ok(())
+                        })?;
+                        return Err(error.context(
+                            "Rejected staged candidate evidence could not authorize automatic repair routing",
+                        ));
+                    }
+                    Err(error) => return Err(error),
                 }
             } else {
                 false
@@ -9101,7 +9231,9 @@ impl Engine {
                 } else {
                     None
                 };
-                let early_staged_review = if review_rejection && !escalation_attempt {
+                let early_staged_review = if (review_rejection || candidate_rejection)
+                    && !escalation_attempt
+                {
                     let database = self
                         .database
                         .lock()
@@ -9114,13 +9246,44 @@ impl Engine {
                         .cloned()
                         .context("feature missing")?;
                     if database.state.auto_ai_repair_enabled
+                        && !self.cancelled()
+                        && self.repair_loop_authorized.load(Ordering::SeqCst)
                         && current.auto_repair_lifecycle == "running"
                     {
-                        review_rejection_requires_staged_automatic_in_workspace(
-                            &self.root,
-                            &current,
-                            &current.checkpoint,
-                        )
+                        if candidate_rejection {
+                            if current.checkpoint != "staged_tool_candidate_rejected" {
+                                Err(anyhow!(
+                                    "Rejected staged candidate checkpoint changed before automatic routing"
+                                ))
+                            } else {
+                                let mut candidate = current.clone();
+                                // The typed rejection is handled immediately below by the
+                                // existing failure transaction, which clears repair_pending
+                                // before any next attempt can be reserved. Project that exact
+                                // post-error discriminator state for the early decision; the
+                                // reservation path independently revalidates the persisted
+                                // no-pending binding before authorizing staged repair.
+                                candidate.last_failure_kind = "candidate_rejection".into();
+                                candidate.repair_pending = false;
+                                if let Some(checkpoint) =
+                                    automatic_staged_review_checkpoint(&candidate)
+                                {
+                                    automatic_staged_review_required_in_workspace(
+                                        &self.root, &candidate, checkpoint,
+                                    )
+                                } else {
+                                    Err(anyhow!(
+                                        "Rejected staged candidate has no exact rejected-review linkage"
+                                    ))
+                                }
+                            }
+                        } else {
+                            review_rejection_requires_staged_automatic_in_workspace(
+                                &self.root,
+                                &current,
+                                &current.checkpoint,
+                            )
+                        }
                     } else {
                         Ok(false)
                     }
@@ -9320,6 +9483,8 @@ impl Engine {
                         .lock()
                         .map_err(|_| anyhow!("state lock failed"))?;
                     database.state.auto_ai_repair_enabled
+                        && !self.cancelled()
+                        && self.repair_loop_authorized.load(Ordering::SeqCst)
                         && (repairable_validation || review_rejection || candidate_rejection)
                         && database
                             .state
@@ -12310,7 +12475,16 @@ impl Engine {
 
 fn staged_repair_environment_guidance(project: &Path) -> Result<String> {
     let shell = if cfg!(windows) {
-        "The shell tool executes Windows PowerShell. Use PowerShell syntax, not Unix tail, heredocs, or shell activation. Invoke a quoted executable path with the PowerShell call operator (&)."
+        r#"The shell tool executes Windows PowerShell. Use PowerShell syntax, not Unix tail, heredocs, or shell activation. Invoke a quoted executable path with the PowerShell call operator (&). Windows PowerShell 5.1 promotes ordinary native stderr to NativeCommandError when the surrounding shell uses ErrorActionPreference=Stop. Run each native build or test command in a child scope, stringify the merged output, capture the native exit code immediately, and propagate a missing or nonzero code. Use this shape, substituting only the executable and arguments:
+& {
+    $ErrorActionPreference = 'Continue'
+    $global:LASTEXITCODE = $null
+    & 'C:\path\to\python.exe' -B -m unittest 2>&1 | ForEach-Object { "$_" }
+    $nativeExitCode = $LASTEXITCODE
+    if ($null -eq $nativeExitCode) { exit 1 }
+    if ($nativeExitCode -ne 0) { exit $nativeExitCode }
+}
+Leaving the successful child scope restores the surrounding fail-closed error preference. Native stderr text alone is not the verdict; only the captured zero exit code is success."#
     } else {
         "Use this host's shell syntax and quote executable paths."
     };
@@ -15903,7 +16077,10 @@ fn automatic_failure_prompt_json(
         && proposal.feature_checkpoint.ends_with("_rejected")
     {
         Some(proposal.feature_checkpoint.as_str())
-    } else if proposal.feature_checkpoint == "staged_tool_candidate_quarantined" {
+    } else if matches!(
+        proposal.feature_checkpoint.as_str(),
+        "staged_tool_candidate_rejected" | "staged_tool_candidate_quarantined"
+    ) {
         feature.repair_history.last().and_then(|evidence| {
             (evidence.attempt == feature.repair_attempts)
                 .then_some(evidence.prior_checkpoint.as_str())
@@ -28881,6 +29058,36 @@ mod tests {
     }
 
     #[test]
+    #[cfg(windows)]
+    fn staged_environment_guidance_preserves_native_test_exit_authority() {
+        let directory = tempfile::tempdir().unwrap();
+        let project = fs::canonicalize(directory.path()).unwrap();
+        let guidance = staged_repair_environment_guidance(&project).unwrap();
+
+        let child_scope = guidance.find("& {\n").unwrap();
+        let scoped_continue = guidance
+            .find("$ErrorActionPreference = 'Continue'")
+            .unwrap();
+        let cleared_exit = guidance.find("$global:LASTEXITCODE = $null").unwrap();
+        let merged_plain_output = guidance.find("2>&1 | ForEach-Object { \"$_\" }").unwrap();
+        let captured_exit = guidance.find("$nativeExitCode = $LASTEXITCODE").unwrap();
+        let missing_exit = guidance
+            .find("if ($null -eq $nativeExitCode) { exit 1 }")
+            .unwrap();
+        let propagated_exit = guidance
+            .find("if ($nativeExitCode -ne 0) { exit $nativeExitCode }")
+            .unwrap();
+        assert!(child_scope < scoped_continue);
+        assert!(scoped_continue < cleared_exit);
+        assert!(cleared_exit < merged_plain_output);
+        assert!(merged_plain_output < captured_exit);
+        assert!(captured_exit < missing_exit);
+        assert!(missing_exit < propagated_exit);
+        assert!(guidance.contains("Leaving the successful child scope restores"));
+        assert!(guidance.contains("only the captured zero exit code is success"));
+    }
+
+    #[test]
     fn validation_uses_only_an_ordinary_project_virtual_environment() {
         let directory = tempfile::tempdir().unwrap();
         let project = fs::canonicalize(directory.path()).unwrap();
@@ -31139,6 +31346,433 @@ mod tests {
         assert_eq!(
             feedback["blocking_findings"][1]["path"],
             "tests/test_app.py"
+        );
+    }
+
+    #[test]
+    fn rejected_protected_candidate_routes_source_review_directly_to_staged_repair() {
+        let (_directory, engine) = control_test_engine();
+        fs::create_dir_all(engine.root.join("example/src")).unwrap();
+        fs::create_dir_all(engine.root.join("example/tests")).unwrap();
+        fs::write(
+            engine.root.join("example/src/publisher.py"),
+            b"def publish(): return 'old'\n",
+        )
+        .unwrap();
+        fs::write(
+            engine.root.join("example/tests/test_publisher.py"),
+            b"def test_publish(): assert True\n",
+        )
+        .unwrap();
+        let mut retained_edits = vec![Edit {
+            path: "src/publisher.py".into(),
+            content: "def publish(): return 'old'\n".into(),
+            before: None,
+            asset: None,
+            delete: false,
+            before_text: None,
+            publication_before: None,
+        }];
+        for index in 0..40 {
+            let path = format!("src/support_{index:02}.py");
+            let content = format!("VALUE_{index:02} = {index}\n");
+            fs::write(engine.root.join("example").join(&path), &content).unwrap();
+            retained_edits.push(Edit {
+                path,
+                content,
+                before: None,
+                asset: None,
+                delete: false,
+                before_text: None,
+                publication_before: None,
+            });
+        }
+        let project = fs::canonicalize(engine.root.join("example")).unwrap();
+        engine
+            .change(|state| {
+                state.auto_ai_repair_enabled = true;
+                state.auto_ai_repair_max_escalations = 7;
+                state.auto_ai_repair_policy_revision = 9;
+                let feature = &mut state.queue[0];
+                let retained_edit_evidence = retained_edits
+                    .iter()
+                    .map(|edit| {
+                        Ok(RepairEditEvidence {
+                            path: edit.path.clone(),
+                            before: edit.before.clone(),
+                            content_hash: edit_sha256(edit)?,
+                        })
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                feature.repair_attempts = 2;
+                feature.repair_history = vec![
+                    RepairAttemptEvidence {
+                        attempt: 1,
+                        prior_checkpoint: "review_8_rejected".into(),
+                        prior_message: "first correction retained for audit".into(),
+                        prior_edits: Vec::new(),
+                    },
+                    RepairAttemptEvidence {
+                        attempt: 2,
+                        prior_checkpoint: "review_9_rejected".into(),
+                        prior_message: "publisher correction retained for audit".into(),
+                        prior_edits: retained_edit_evidence,
+                    },
+                ];
+                feature.review_attempts = 9;
+                feature.review_history = vec![current_rejected_review(
+                    9,
+                    vec![DeveloperReviewFinding {
+                        finding_id: "publisher-regression".into(),
+                        path: "src/publisher.py".into(),
+                        message: "Correct the publisher output and add the regression assertion."
+                            .into(),
+                    }],
+                )];
+                feature.edits = Some(retained_edits.clone());
+                let packet = developer_review_batch_set(
+                    feature,
+                    &project,
+                    feature.edits.as_deref().unwrap(),
+                    &feature.review_history[0].validation_evidence_sha256,
+                )?;
+                let batch_count = packet.batches.len();
+                feature.review_history[0].packet_sha256 = packet.aggregate_sha256().to_owned();
+                feature.review_history[0].batch_packet_sha256s = packet
+                    .batches
+                    .iter()
+                    .map(|batch| batch.sha256())
+                    .collect::<Result<Vec<_>>>()?;
+                feature.review_history[0].batch_receipt_sha256s =
+                    vec!["e".repeat(64); batch_count];
+                feature.repair_pending = false;
+                feature.escalation_pending = false;
+                feature.review_pending = None;
+                feature.auto_ai_repair_limit = Some(7);
+                feature.auto_repair_policy_revision = Some(9);
+                feature.auto_repair_epoch = 4;
+                set_auto_repair_lifecycle(feature, "running", "fixture candidate rejection")?;
+                reject_staged_tool_candidate(
+                    feature,
+                    17,
+                    &[],
+                    "The staged tool candidate changed a protected test or validation input; no candidate files were applied",
+                )?;
+                feature.last_failure_kind = "candidate_rejection".into();
+                feature.last_code_failure_summary = feature.message.clone();
+                Ok(())
+            })
+            .unwrap();
+
+        let before = engine.database.lock().unwrap().state.queue[0].clone();
+        assert_eq!(before.repair_attempts, 2);
+        assert_eq!(
+            automatic_staged_review_checkpoint(&before),
+            Some("review_9_rejected")
+        );
+        assert!(automatic_staged_review_required(&before, "review_9_rejected", &project).unwrap());
+
+        let mut wrong_aggregate = before.clone();
+        wrong_aggregate.review_history[0].packet_sha256 = hash(b"wrong aggregate");
+        assert!(
+            automatic_staged_review_required(&wrong_aggregate, "review_9_rejected", &project)
+                .unwrap_err()
+                .to_string()
+                .contains("exact reviewed predecessor")
+        );
+
+        let mut wrong_batch = before.clone();
+        wrong_batch.review_history[0].batch_packet_sha256s[0] = hash(b"wrong batch");
+        assert!(
+            automatic_staged_review_required(&wrong_batch, "review_9_rejected", &project)
+                .unwrap_err()
+                .to_string()
+                .contains("exact reviewed predecessor")
+        );
+
+        let mut reordered_batches = before.clone();
+        assert_eq!(
+            reordered_batches.review_history[0]
+                .batch_packet_sha256s
+                .len(),
+            2
+        );
+        reordered_batches.review_history[0]
+            .batch_packet_sha256s
+            .swap(0, 1);
+        assert!(automatic_staged_review_required(
+            &reordered_batches,
+            "review_9_rejected",
+            &project
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("exact reviewed predecessor"));
+
+        let mut changed_validation = before.clone();
+        changed_validation.review_history[0].validation_evidence_sha256 =
+            hash(b"changed validation evidence");
+        assert!(automatic_staged_review_required(
+            &changed_validation,
+            "review_9_rejected",
+            &project
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("exact reviewed predecessor"));
+
+        fs::write(
+            project.join("src/publisher.py"),
+            b"def publish(): return 'drifted'\n",
+        )
+        .unwrap();
+        assert!(
+            automatic_staged_review_required(&before, "review_9_rejected", &project)
+                .unwrap_err()
+                .to_string()
+                .contains("changed before escalation approval")
+        );
+        fs::write(
+            project.join("src/publisher.py"),
+            b"def publish(): return 'old'\n",
+        )
+        .unwrap();
+
+        let reserved = engine
+            .reserve_automatic_escalation(&before.id)
+            .unwrap()
+            .expect("typed protected-candidate rejection must route to staged repair");
+        let database = engine.database.lock().unwrap();
+        let feature = &database.state.queue[0];
+        assert_eq!(feature.repair_attempts, 2);
+        assert_eq!(feature.repair_history.len(), 2);
+        assert_eq!(feature.escalation_count, 1);
+        assert_eq!(feature.checkpoint, "escalation_1_preparing");
+        assert_eq!(
+            feature
+                .escalation_proposal
+                .as_ref()
+                .unwrap()
+                .feature_checkpoint,
+            "staged_tool_candidate_rejected"
+        );
+        let failure: Value = serde_json::from_str(
+            &automatic_failure_prompt_json(
+                feature,
+                feature.escalation_proposal.as_ref().unwrap(),
+                &reserved.3,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let feedback = &failure["latest_checkpoint_matched_rejected_review"];
+        assert_eq!(feedback["review_attempt"], 9);
+        assert_eq!(
+            feedback["blocking_findings"][0]["finding_id"],
+            "publisher-regression"
+        );
+        assert_eq!(feedback["blocking_findings"][0]["path"], "src/publisher.py");
+        assert_eq!(
+            feedback["blocking_findings"][0]["message"],
+            "Correct the publisher output and add the regression assertion."
+        );
+    }
+
+    #[test]
+    fn rejected_protected_candidate_requires_complete_current_review_linkage() {
+        let (_directory, engine) = control_test_engine();
+        let project = fs::canonicalize(engine.root.join("example")).unwrap();
+        let mut feature = feature_with_status("failed");
+        feature.checkpoint = "staged_tool_candidate_rejected".into();
+        feature.last_failure_kind = "candidate_rejection".into();
+        feature.edits = None;
+        feature.repair_attempts = 2;
+        feature.repair_history = vec![
+            RepairAttemptEvidence {
+                attempt: 1,
+                prior_checkpoint: "review_8_rejected".into(),
+                prior_message: "first correction".into(),
+                prior_edits: Vec::new(),
+            },
+            RepairAttemptEvidence {
+                attempt: 2,
+                prior_checkpoint: "review_9_rejected".into(),
+                prior_message: "second correction".into(),
+                prior_edits: Vec::new(),
+            },
+        ];
+        feature.review_attempts = 9;
+        feature.review_history = vec![current_rejected_review(
+            9,
+            vec![DeveloperReviewFinding {
+                finding_id: "publisher-regression".into(),
+                path: "src/publisher.py".into(),
+                message: "Correct the publisher output and add a regression assertion.".into(),
+            }],
+        )];
+        feature.auto_repair_lifecycle = "running".into();
+
+        let mut missing = feature.clone();
+        missing.review_history.clear();
+        assert!(
+            automatic_staged_review_required(&missing, "review_9_rejected", &project)
+                .unwrap_err()
+                .to_string()
+                .contains("does not match its checkpoint")
+        );
+
+        let mut stale = feature.clone();
+        stale.review_attempts = 10;
+        assert!(
+            automatic_staged_review_required(&stale, "review_9_rejected", &project)
+                .unwrap_err()
+                .to_string()
+                .contains("does not match its checkpoint")
+        );
+
+        let mut malformed = feature.clone();
+        malformed.review_history[0].packet_sha256 = "not-a-digest".into();
+        assert!(
+            automatic_staged_review_required(&malformed, "review_9_rejected", &project)
+                .unwrap_err()
+                .to_string()
+                .contains("Invalid rejected review packet digest")
+        );
+
+        let mut missing_repair_link = feature.clone();
+        missing_repair_link.repair_history.pop();
+        assert!(automatic_staged_review_required(
+            &missing_repair_link,
+            "review_9_rejected",
+            &project
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("no exact rejected-review linkage"));
+
+        let mut changed_checkpoint = missing_repair_link.clone();
+        changed_checkpoint
+            .repair_history
+            .push(RepairAttemptEvidence {
+                attempt: 2,
+                prior_checkpoint: "review_9_rejected".into(),
+                prior_message: "second correction".into(),
+                prior_edits: Vec::new(),
+            });
+        changed_checkpoint.checkpoint = "validation_failed".into();
+        assert_eq!(
+            automatic_staged_review_checkpoint(&changed_checkpoint),
+            None
+        );
+
+        let mut retained_edits = changed_checkpoint.clone();
+        retained_edits.checkpoint = "staged_tool_candidate_rejected".into();
+        retained_edits.edits = Some(vec![Edit {
+            path: "app.py".into(),
+            content: "VALUE = 0\n".into(),
+            before: None,
+            asset: None,
+            delete: false,
+            before_text: None,
+            publication_before: None,
+        }]);
+        assert_eq!(
+            automatic_staged_review_checkpoint(&retained_edits),
+            Some("review_9_rejected")
+        );
+        assert!(
+            automatic_staged_review_required(&retained_edits, "review_9_rejected", &project)
+                .unwrap_err()
+                .to_string()
+                .contains("changed the retained cumulative edit count")
+        );
+
+        let mut repair_pending = changed_checkpoint.clone();
+        repair_pending.checkpoint = "staged_tool_candidate_rejected".into();
+        repair_pending.repair_pending = true;
+        assert_eq!(automatic_staged_review_checkpoint(&repair_pending), None);
+
+        let mut escalation_pending = changed_checkpoint;
+        escalation_pending.checkpoint = "staged_tool_candidate_rejected".into();
+        escalation_pending.escalation_pending = true;
+        assert_eq!(
+            automatic_staged_review_checkpoint(&escalation_pending),
+            None
+        );
+
+        let mut validation_predecessor = feature.clone();
+        validation_predecessor.repair_history[1].prior_checkpoint = "validation_failed".into();
+        validation_predecessor.review_attempts = 0;
+        validation_predecessor.review_history.clear();
+        assert_eq!(
+            automatic_staged_review_checkpoint(&validation_predecessor),
+            Some("validation_failed")
+        );
+        assert!(!automatic_staged_review_required(
+            &validation_predecessor,
+            "validation_failed",
+            &project
+        )
+        .unwrap());
+
+        let mut quarantined_source_review = feature;
+        quarantined_source_review.checkpoint = "staged_tool_candidate_quarantined".into();
+        assert_eq!(
+            automatic_staged_review_checkpoint(&quarantined_source_review),
+            Some("review_9_rejected")
+        );
+        assert!(!automatic_staged_review_required(
+            &quarantined_source_review,
+            "review_9_rejected",
+            &project
+        )
+        .unwrap());
+    }
+
+    #[test]
+    fn rejected_candidate_live_bytes_reject_recreated_deletion_and_asset_metadata_drift() {
+        let directory = tempfile::tempdir().unwrap();
+        let project = fs::canonicalize(directory.path()).unwrap();
+        let deletion = Edit {
+            path: "obsolete.txt".into(),
+            content: String::new(),
+            before: Some(hash(b"obsolete bytes\n")),
+            asset: None,
+            delete: true,
+            before_text: Some("obsolete bytes\n".into()),
+            publication_before: None,
+        };
+        validate_current_review_edits(std::slice::from_ref(&deletion), &project).unwrap();
+        fs::write(project.join("obsolete.txt"), b"recreated\n").unwrap();
+        assert!(
+            validate_current_review_edits(std::slice::from_ref(&deletion), &project)
+                .unwrap_err()
+                .to_string()
+                .contains("changed before escalation approval")
+        );
+        fs::remove_file(project.join("obsolete.txt")).unwrap();
+
+        let png = fixture_png(4, 3);
+        fs::write(project.join("retained.png"), &png).unwrap();
+        let asset = Edit {
+            path: "retained.png".into(),
+            content: String::new(),
+            before: None,
+            asset: Some(BinaryAsset {
+                media_type: "image/png".into(),
+                data_base64: BASE64_STANDARD.encode(&png),
+                width: 4,
+                height: 3,
+            }),
+            delete: false,
+            before_text: None,
+            publication_before: None,
+        };
+        validate_current_review_edits(std::slice::from_ref(&asset), &project).unwrap();
+        let mut metadata_drift = asset;
+        metadata_drift.asset.as_mut().unwrap().width = 5;
+        assert!(
+            validate_current_review_edits(std::slice::from_ref(&metadata_drift), &project).is_err()
         );
     }
 

@@ -326,3 +326,9 @@ incomplete tails separately from malformed committed records. The normal native
 GitHub setup E2E exercises that reader with real runner/fixture processes.
 See [the checkpoint and resume boundaries](developer-response-origin-checkpoint.md);
 parser matrices, runtime reconciliation, installed QA and FFT completion remain pending.
+
+
+Batched review transport and installed recovery evidence are recorded in
+[review transport validation](developer-review-transport-validation.md). The
+review/scalable native fixtures exercise semantic responses with Windows-owned
+receipt metadata; real provider acceptance is recorded separately.
