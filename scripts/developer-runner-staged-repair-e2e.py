@@ -63,6 +63,8 @@ def main():
     parser.add_argument("--binary", required=True)
     parser.add_argument("--opencode-executable",
         default=os.environ.get("ASSEMBLYWRIGHT_DEVELOPER_OPENCODE_EXECUTABLE"))
+    parser.add_argument("--candidate-rejection-route-only", action="store_true",
+        help="prove source-review feedback survives a rejected protected candidate and routes directly to staged repair")
     args = parser.parse_args()
     binary = str(Path(args.binary).resolve())
     opencode = args.opencode_executable or provision_pinned_runtime(
@@ -72,6 +74,7 @@ def main():
         parser.error(f"pinned OpenCode executable does not exist: {opencode}")
 
     phases = []
+    staged_feedback_observed = []
 
     class Model(http.server.BaseHTTPRequestHandler):
         def log_message(self, *unused):
@@ -106,7 +109,25 @@ def main():
             if tool_results:
                 return model_reply(self, request,
                     {"content": "Completed the bounded project change."}, "stop")
-            if "repair attempt 1 of 3" in prompt.lower():
+            candidate_route = "candidate-rejection-route" in prompt
+            if candidate_route and "repair attempt 1 of 3" in prompt.lower():
+                phase = "ordinary_protected_candidate"
+                code = ("from pathlib import Path; "
+                    "Path('app.py').write_text('VALUE = 1\\n'); "
+                    "Path('tests/test_site.py').write_text('assert False\\n')")
+            elif candidate_route and "Staged build environment:" in prompt:
+                phase = "candidate_rejection_staged_automatic"
+                staged_feedback_observed.append(
+                    "Correct the publisher output and add the regression assertion." in prompt)
+                code = ("from pathlib import Path; "
+                    "Path('app.py').write_text('VALUE = 1\\n'); "
+                    "Path('stage.txt').write_text('candidate rejection staged repair\\n')")
+            elif candidate_route:
+                phase = "candidate_route_initial"
+                code = ("from pathlib import Path; Path('tests').mkdir(exist_ok=True); "
+                    "Path('app.py').write_text('VALUE = 0\\n'); "
+                    "Path('tests/test_site.py').write_text('assert True\\n')")
+            elif "repair attempt 1 of 3" in prompt.lower():
                 phase = "ordinary_successor"
                 code = "from pathlib import Path; Path('app.py').write_text('VALUE = 1\\n')"
             elif "Staged build environment:" in prompt:
@@ -222,11 +243,20 @@ def main():
                 api("permissions", {"mode": "full",
                     "expected_revision": permissions["revision"]})
             feature_id = str(uuid.uuid4())
+            project_name = ("candidate-rejection-route"
+                if args.candidate_rejection_route_only else "lineage")
+            instruction = ((
+                "Build the candidate-rejection-route fixture "
+                "[fixture:source-regression]. The source correction must preserve the "
+                "existing protected regression input."
+            ) if args.candidate_rejection_route_only else (
+                "Build the lineage fixture [fixture:reject-zero]. "
+                "The first protected blocker requires staged repair; any later source "
+                "blocker must use ordinary repair."
+            ))
             state = enqueue_with_plan(f"http://127.0.0.1:{port}", token, {
-                "id": feature_id, "project": "lineage", "model_target": "windows",
-                "instruction": ("Build the lineage fixture [fixture:reject-zero]. "
-                    "The first protected blocker requires staged repair; any later source "
-                    "blocker must use ordinary repair."),
+                "id": feature_id, "project": project_name, "model_target": "windows",
+                "instruction": instruction,
                 "validation": f'"{sys.executable}" -B tests/test_site.py'})
             feature = next(item for item in state["queue"] if item["id"] == feature_id)
             api("control", {"action": "resume", "expected_feature_id": feature_id,
@@ -239,10 +269,20 @@ def main():
             public = next(item for item in completed["queue"] if item["id"] == feature_id)
             assert public["repair_attempts"] == 1, public
             assert public["escalation_count"] == 1, public
-            assert public["review_attempts"] == 3, public
-            assert phases == ["initial", "staged_automatic", "ordinary_successor"], phases
-            assert (projects / "lineage/app.py").read_text() == "VALUE = 1\n"
-            assert (projects / "lineage/stage.txt").is_file()
+            expected_review_attempts = 2 if args.candidate_rejection_route_only else 3
+            assert public["review_attempts"] == expected_review_attempts, public
+            if args.candidate_rejection_route_only:
+                assert phases == ["candidate_route_initial", "ordinary_protected_candidate",
+                    "candidate_rejection_staged_automatic"], phases
+            else:
+                assert phases == [
+                    "initial", "staged_automatic", "ordinary_successor"], phases
+            assert (projects / project_name / "app.py").read_text() == "VALUE = 1\n"
+            assert (projects / project_name / "stage.txt").is_file()
+            if args.candidate_rejection_route_only:
+                assert staged_feedback_observed == [True], staged_feedback_observed
+                assert (projects / project_name / "tests/test_site.py").read_text() == \
+                    "assert True\n"
 
             with closing(sqlite3.connect(data / "developer.sqlite3")) as database:
                 durable = json.loads(database.execute(
@@ -250,23 +290,111 @@ def main():
             queue = next(value for key, value in durable.items() if key.startswith("queue_v"))
             feature = next(item for item in queue if item["id"] == feature_id)
             proposal = feature["escalation_proposal"]
-            assert proposal["status"] == "failed" and proposal["staged_binding"]
+            expected_proposal_status = ("succeeded"
+                if args.candidate_rejection_route_only else "failed")
+            assert proposal["status"] == expected_proposal_status and proposal["staged_binding"]
             assert proposal["application_state_sha256"]
             receipts = [item for item in feature["escalation_history"]
                 if item["proposal_id"] == proposal["proposal_id"]]
             assert [item["outcome"] for item in receipts] == [
-                "ready", "policy_authorized", "failed"], receipts
+                "ready", "policy_authorized", expected_proposal_status], receipts
             repair = feature["repair_history"][0]
-            assert repair["prior_checkpoint"] == "review_2_rejected", repair
-            feedback = json.loads(repair["prior_message"])
-            assert feedback["feedback"]["blocking_findings"][0]["path"] == "app.py"
-            assert [item["outcome"] for item in feature["review_history"]] == [
-                "rejected", "rejected", "approved"]
+            expected_prior_review = ("review_1_rejected"
+                if args.candidate_rejection_route_only else "review_2_rejected")
+            assert repair["prior_checkpoint"] == expected_prior_review, repair
+            if args.candidate_rejection_route_only:
+                assert "Correct the publisher output and add the regression assertion." in \
+                    repair["prior_message"]
+                finding = feature["review_history"][0]["blocking_findings"][0]
+                assert finding == {"finding_id": "publisher-regression", "path": "app.py",
+                    "message": "Correct the publisher output and add the regression assertion."}
+                assert [item["outcome"] for item in feature["review_history"]] == [
+                    "rejected", "approved"]
+                assert proposal["feature_checkpoint"] == "staged_tool_candidate_rejected"
+                assert len(feature["repair_history"]) == 1
+            else:
+                feedback = json.loads(repair["prior_message"])
+                assert feedback["feedback"]["blocking_findings"][0]["path"] == "app.py"
+                assert [item["outcome"] for item in feature["review_history"]] == [
+                    "rejected", "rejected", "approved"]
+
+            malformed_linkage_held = False
+            if args.candidate_rejection_route_only:
+                calls_before_malformed = list(phases)
+                reviews_before_malformed = len(feature["review_history"])
+                process.terminate()
+                process.wait(timeout=15)
+                with closing(sqlite3.connect(data / "developer.sqlite3")) as database:
+                    persisted = json.loads(database.execute(
+                        "SELECT state FROM developer_state WHERE id=1").fetchone()[0])
+                    persisted_queue = next(value for key, value in persisted.items()
+                        if key.startswith("queue_v"))
+                    malformed = next(item for item in persisted_queue
+                        if item["id"] == feature_id)
+                    malformed["status"] = "failed"
+                    malformed["checkpoint"] = "staged_tool_candidate_rejected"
+                    malformed["message"] = "Rejected staged candidate retained for malformed-linkage proof"
+                    malformed["last_failure_kind"] = "candidate_rejection"
+                    malformed["last_code_failure_summary"] = malformed["message"]
+                    malformed["repair_attempts"] = 1
+                    malformed["repair_history"] = []
+                    malformed["repair_pending"] = False
+                    malformed["escalation_pending"] = False
+                    malformed["review_attempts"] = 1
+                    malformed["review_history"] = malformed["review_history"][:1]
+                    malformed["review_pending"] = None
+                    malformed["review_status"] = "rejected"
+                    malformed["review_summary"] = malformed["review_history"][0]["summary"]
+                    malformed["edits"] = None
+                    malformed["auto_repair_lifecycle"] = "held"
+                    malformed["auto_repair_reason"] = \
+                        "Malformed-linkage proof awaits explicit Resume"
+                    persisted["revision"] += 1
+                    database.execute("UPDATE developer_state SET state=? WHERE id=1",
+                        (json.dumps(persisted, separators=(",", ":")),))
+                    database.commit()
+                process = subprocess.Popen(command, stdin=subprocess.DEVNULL,
+                    stdout=log, stderr=log)
+                restarted = wait(lambda state: not state["running"])
+                resumable = next(item for item in restarted["queue"]
+                    if item["id"] == feature_id)
+                api("control", {"action": "resume", "expected_feature_id": feature_id,
+                    "expected_model_target": resumable["model_target"],
+                    "expected_status": resumable["status"],
+                    "expected_checkpoint": resumable["checkpoint"]})
+                held = wait(lambda state: not state["running"] and
+                    next(item for item in state["queue"] if item["id"] == feature_id)
+                    ["auto_repair_lifecycle"] == "held")
+                held_feature = next(item for item in held["queue"]
+                    if item["id"] == feature_id)
+                assert held_feature["checkpoint"] == "staged_tool_candidate_rejected"
+                assert held_feature["repair_attempts"] == 1
+                assert held_feature["escalation_count"] == 1
+                assert "malformed, stale, or incomplete rejected-review linkage" in \
+                    held_feature["auto_repair_reason"]
+                assert phases == calls_before_malformed
+                durable_held = None
+                with closing(sqlite3.connect(data / "developer.sqlite3")) as database:
+                    persisted = json.loads(database.execute(
+                        "SELECT state FROM developer_state WHERE id=1").fetchone()[0])
+                    persisted_queue = next(value for key, value in persisted.items()
+                        if key.startswith("queue_v"))
+                    durable_held = next(item for item in persisted_queue
+                        if item["id"] == feature_id)
+                assert len(durable_held["review_history"]) == 1
+                assert len(durable_held["review_history"]) == reviews_before_malformed - 1
+                assert durable_held["repair_history"] == []
+                malformed_linkage_held = True
             print(json.dumps({"platform": sys.platform,
                 "protected_review_routes_to_staged_automatic": True,
                 "staged_application_state_bound": True,
                 "source_only_review_routes_to_ordinary_successor": True,
                 "ordinary_successor_revalidated_and_freshly_reviewed": True,
+                "candidate_rejection_routes_before_ordinary_attempt_two":
+                    args.candidate_rejection_route_only,
+                "candidate_rejection_preserves_exact_review_feedback":
+                    args.candidate_rejection_route_only,
+                "malformed_candidate_review_linkage_holds": malformed_linkage_held,
                 "repair_attempts": public["repair_attempts"],
                 "escalation_count": public["escalation_count"],
                 "review_attempts": public["review_attempts"]}))

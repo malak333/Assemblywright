@@ -69,6 +69,16 @@ accepting partially reviewed bytes. Current file hashes are rechecked before
 completion or publication. Legacy evidence remains readable without making old
 approvals authorize a new candidate.
 
+The batched provider response contains only its decision, findings, and (for a batch)
+summary and dependency assessment. Windows creates the persisted binding fields
+from the exact canonical input of that completed tool-free call, including the
+ordered file/asset manifest and aggregate receipt hashes. Opaque hashes and file
+metadata are not model-generated output. Strict unknown-field rejection and
+semantic validation reject malformed judgments, out-of-candidate findings, and
+contradictory decisions. An aggregate cannot override a rejected batch or omit
+its blockers. Persisted schema versions and receipt validation remain unchanged.
+
+
 ## Image evidence
 
 Supported raster assets are captured as exact bytes with their content hash,
@@ -83,10 +93,10 @@ bytes, unsupported visual transport, and missing asset review fail closed. Image
 staging is private and temporary, preserves the existing tool-free review
 boundary, and participates in cancellation and process cleanup.
 
-The response schema uses discriminated `anyOf` entries for text and assets,
-matching the provider's [supported Structured Outputs schema subset](https://developers.openai.com/api/docs/guides/structured-outputs#supported-schemas).
-Native fixtures verify bindings and transport, while a real provider run remains
-necessary to prove provider acceptance.
+Text/asset discrimination and exact manifest order are host-owned receipt
+contracts. Provider Structured Outputs schemas describe only reviewer judgments.
+Native fixtures verify semantic parsing, host binding, and image transport; a
+real provider run remains necessary to prove provider acceptance.
 
 ## Recovery and operation
 
@@ -203,6 +213,18 @@ unchanged; during application it advances only for exactly authorized applied
 paths. These corrections receive complete independent review, including whether
 coverage or requirements were weakened.
 
+When an ordinary repair following a rejected review attempts a protected-input
+change, its typed `staged_tool_candidate_rejected` result may select combined
+automatic repair immediately. The retained repair attempt must link to one
+complete current rejected-review record; the staged prompt carries that exact
+feedback. Routing does not infer permission from words such as "regression test"
+in a finding. Enabled Auto AI repair, its captured budget and policy, idle
+operations, complete snapshots, and cancellation checks remain required. An
+invalid purported review linkage holds; a valid validation-only predecessor
+keeps its existing bounded recovery path. No rejected candidate files are
+applied, no ordinary attempt is erased, and fresh validation and independent
+review still decide the combined result.
+
 Resuming partial application must match this recorded state and
 its original one-shot request, unique preparation and authorization receipts,
 candidate digest, feature attempt, and current policy. An unexpected restart
@@ -295,6 +317,13 @@ This is model guidance under the existing Developer Full-access exception;
 virtual environments are omitted from editable review entries and the staged
 copy, but their bytes remain covered by recursive aggregate effect fingerprints.
 The guidance is not an OS read-only guarantee.
+
+Windows native build/test guidance accounts for PowerShell 5.1's ordinary-stderr
+`NativeCommandError` behavior. A child scope uses `Continue`, stringifies merged
+native output, captures `$LASTEXITCODE` immediately, rejects a missing exit code,
+and propagates a nonzero exit. Leaving the scope restores the surrounding error
+preference. This prompt guidance changes neither the tool-event failure parser
+nor the immutable validation command; output text is never success authority.
 
 Immutable validation must not silently advance the private application snapshot.
 Staged automatic validation receives `PYTHONDONTWRITEBYTECODE=1` and a fresh,

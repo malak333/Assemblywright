@@ -97,16 +97,24 @@ fn main() {
     if instruction.contains("[fixture:stale]") {
         digest = "0".repeat(64);
     }
-    let rejected_file = if instruction.contains("[fixture:reject-zero]") {
-        packet["files"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|file| file["content"].as_str().unwrap().contains("VALUE = 0"))
+    let source_regression = instruction.contains("[fixture:source-regression]");
+    let rejected_file = if source_regression || instruction.contains("[fixture:reject-zero]") {
+        packet["files"].as_array().unwrap().iter().find(|file| {
+            file["content"].as_str().unwrap().contains("VALUE = 0")
+                && (!source_regression || file["path"] == "app.py")
+        })
     } else {
         None
     };
-    let findings = rejected_file.map(|file| vec![json!({"finding_id":"wrong-value", "path":file["path"], "message":"Implementation must set VALUE to 1 while preserving every other generated file."})]).unwrap_or_default();
+    let findings = rejected_file.map(|file| vec![json!({
+        "finding_id": if source_regression { "publisher-regression" } else { "wrong-value" },
+        "path":file["path"],
+        "message": if source_regression {
+            "Correct the publisher output and add the regression assertion."
+        } else {
+            "Implementation must set VALUE to 1 while preserving every other generated file."
+        }
+    })]).unwrap_or_default();
     let decision = if findings.is_empty() {
         "approved"
     } else {
@@ -168,16 +176,16 @@ fn scalable_review(input: &str, arguments: &[String]) -> Option<Value> {
     .into_iter()
     .find(|marker| input.contains(marker))?;
     let packet: Value = serde_json::from_str(input.split_once(marker)?.1).unwrap();
-    let binding = input
-        .split_once("Trusted host-generated response binding JSON follows:\n")?
-        .1
-        .split_once("\nUntrusted ")?
-        .0;
-    let mut output: Value = serde_json::from_str(binding).unwrap();
-    output
-        .as_object_mut()
-        .unwrap()
-        .remove("ordered_image_attachments");
+    let context = input
+        .split_once("Trusted host-generated review context JSON follows:\n")
+        .and_then(|(_, value)| value.split_once("\nUntrusted "))
+        .map(|(value, _)| serde_json::from_str::<Value>(value).unwrap())
+        .unwrap_or_else(|| json!({}));
+    let mut output = json!({
+        "decision": "approved",
+        "blocking_findings": [],
+        "non_blocking_findings": []
+    });
     let observed = arguments
         .windows(2)
         .filter(|pair| pair[0] == "--image")
@@ -232,13 +240,15 @@ fn scalable_review(input: &str, arguments: &[String]) -> Option<Value> {
     if instruction.contains("[fixture:malformed]") {
         return Some(json!("malformed"));
     }
-    if instruction.contains("[fixture:wait]") && output.get("review_batch_sha256").is_some() {
+    if instruction.contains("[fixture:wait]") && packet.get("batch_index").is_some() {
         std::thread::sleep(std::time::Duration::from_secs(20));
     }
+    let source_regression = instruction.contains("[fixture:source-regression]");
     let rejected = packet["files"].as_array().and_then(|files| {
         files.iter().find(|file| {
-            instruction.contains("[fixture:reject-zero]")
+            (source_regression || instruction.contains("[fixture:reject-zero]"))
                 && file["content"].as_str().unwrap_or("").contains("VALUE = 0")
+                && (!source_regression || file["path"] == "app.py")
         })
     });
     output["decision"] = json!(if rejected.is_some() {
@@ -247,7 +257,13 @@ fn scalable_review(input: &str, arguments: &[String]) -> Option<Value> {
         "approved"
     });
     output["blocking_findings"] = rejected.map(|file| json!([{
-        "finding_id":"wrong-value", "path":file["path"], "message":"Implementation must set VALUE to 1."
+        "finding_id": if source_regression { "publisher-regression" } else { "wrong-value" },
+        "path":file["path"],
+        "message": if source_regression {
+            "Correct the publisher output and add the regression assertion."
+        } else {
+            "Implementation must set VALUE to 1."
+        }
     }])).unwrap_or_else(|| json!([]));
     output["non_blocking_findings"] = json!([]);
     if let Some(receipts) = packet["ordered_batch_receipts"].as_array() {
@@ -281,25 +297,24 @@ fn scalable_review(input: &str, arguments: &[String]) -> Option<Value> {
         output["interfaces_and_dependencies"] = json!([]);
     }
     if (instruction.contains("[fixture:stale-batch]") || instruction.contains("[fixture:stale]"))
-        && output.get("review_batch_sha256").is_some()
+        && packet.get("batch_index").is_some()
     {
         output["review_batch_sha256"] = json!("0".repeat(64));
     }
-    if instruction.contains("[fixture:omit-batch-entry]")
-        && output.get("review_batch_sha256").is_some()
-    {
+    if instruction.contains("[fixture:omit-batch-entry]") && packet.get("batch_index").is_some() {
+        output["reviewed_entries"] = context["reviewed_entries"].clone();
         output["reviewed_entries"].as_array_mut().unwrap().pop();
     }
     if instruction.contains("[fixture:stale-aggregate]")
-        && output.get("ordered_batch_receipt_sha256s").is_some()
+        && packet.get("ordered_batch_receipts").is_some()
     {
         output["review_packet_sha256"] = json!("0".repeat(64));
     }
     append_evidence(json!({
-        "kind": if output.get("review_batch_sha256").is_some() { "review_batch" } else { "review_aggregate" },
+        "kind": if packet.get("ordered_batch_receipts").is_some() { "review_aggregate" } else { "review_batch" },
         "candidate_sha256":packet["aggregate_candidate_sha256"],
         "batch_index":packet["batch_index"],"batch_count":packet["batch_count"],
-        "entries":output["reviewed_entries"],"image_sha256s":observed
+        "entries":context.get("reviewed_entries").unwrap_or(&packet["candidate_manifest"]),"image_sha256s":observed
     }));
     Some(output)
 }

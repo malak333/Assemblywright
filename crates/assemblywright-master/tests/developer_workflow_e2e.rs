@@ -93,5 +93,39 @@ fn supervised_developer_workflow_runs_native_processes_and_recovers_checkpoints(
             String::from_utf8_lossy(&output.stderr)
         );
         println!("{script}: {}", String::from_utf8_lossy(&output.stdout));
+        if script == "developer-runner-staged-repair-e2e.py" {
+            let mut candidate_rejection = std::process::Command::new(python);
+            candidate_rejection
+                .arg("-B")
+                .arg(root.join("scripts").join(script))
+                .args([
+                    "--binary",
+                    env!("CARGO_BIN_EXE_assemblywright-developer"),
+                    "--candidate-rejection-route-only",
+                ]);
+            if cfg!(windows) {
+                candidate_rejection.env("ASSEMBLYWRIGHT_DEVELOPER_REVIEW_FIXTURE", &review_fixture);
+            }
+            if let Some(executable) =
+                std::env::var_os("ASSEMBLYWRIGHT_DEVELOPER_OPENCODE_EXECUTABLE")
+            {
+                candidate_rejection
+                    .arg("--opencode-executable")
+                    .arg(executable);
+            }
+            let candidate_output = candidate_rejection
+                .output()
+                .expect("Python is required by the native developer E2E gate");
+            assert!(
+                candidate_output.status.success(),
+                "native developer E2E {script} candidate-rejection route failed: {}\n{}",
+                String::from_utf8_lossy(&candidate_output.stdout),
+                String::from_utf8_lossy(&candidate_output.stderr)
+            );
+            println!(
+                "{script} --candidate-rejection-route-only: {}",
+                String::from_utf8_lossy(&candidate_output.stdout)
+            );
+        }
     }
 }

@@ -80,6 +80,11 @@ review in bounded batches with a final aggregate decision, genuine image review,
 and preflight/recovery that avoids replaying uncertain effects. This extends the
 Developer repair contract; Windows authority, immutable validation, independent
 review, and the separate production/publication proof boundaries remain required.
+Batched review transport returns only reviewer judgments and findings. Windows constructs
+the immutable provider/model, candidate, validation, ordered manifest, and receipt
+bindings from the exact tool-free invocation input. The provider never echoes
+opaque digests to establish identity. Strict persisted receipt checks, rejection
+propagation, cancellation, and current-byte checks still precede completion.
 Pinned OpenCode sessions allow 128 inference steps for feature repair and 48 for
 project chat. The durable action ledger independently counts individual tool calls
 at the corresponding 128/48 caps; existing feature/chat deadlines are unchanged.

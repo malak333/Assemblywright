@@ -177,14 +177,20 @@ real HTTP, filesystem and SQLite boundaries with fixture model responses:
 
 ```sh
 python3 -B scripts/developer-runner-staged-repair-e2e.py --binary target/debug/assemblywright-developer
+python3 -B scripts/developer-runner-staged-repair-e2e.py --binary target/debug/assemblywright-developer --candidate-rejection-route-only
 cargo test -p assemblywright-master --bin assemblywright-developer terminal_staged -- --nocapture
 ```
 
 It forces protected review rejection, staged automatic application, a second
 source-only rejection, ordinary successor repair, fresh validation and a third
 approved review. It asserts the staged application-state binding and immutable
-receipt ancestry. The canonical `developer_workflow_e2e` test includes this
-harness. On Windows, first build `developer_review_fixture` with
+receipt ancestry. The canonical `developer_workflow_e2e` test includes both modes of this
+harness. The candidate-rejection mode starts with a source-file review finding
+that requests a regression assertion, rejects an ordinary protected-test
+candidate without applying it, and routes directly to staged repair before a
+second ordinary attempt. It retains nonempty cumulative edits, preserves exact
+review feedback, and separately proves that malformed predecessor linkage holds
+without another model call or write. On Windows, first build `developer_review_fixture` with
 `cargo build -p assemblywright-master --example developer_review_fixture`, then
 pass the runner's native `.exe` path through `--binary` and set
 `ASSEMBLYWRIGHT_DEVELOPER_REVIEW_FIXTURE` to the reviewer fixture's `.exe` path.

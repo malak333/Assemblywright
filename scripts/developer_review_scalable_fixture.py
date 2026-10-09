@@ -15,9 +15,11 @@ def scalable_review(input_text, arguments, evidence):
         return None
     raw = input_text.split(marker, 1)[1]
     packet = json.loads(raw)
-    binding_text = input_text.split(
-        "Trusted host-generated response binding JSON follows:\n", 1)[1]
-    binding = json.loads(binding_text.split("\nUntrusted ", 1)[0])
+    context = {}
+    if "Trusted host-generated review context JSON follows:\n" in input_text:
+        context_text = input_text.split(
+            "Trusted host-generated review context JSON follows:\n", 1)[1]
+        context = json.loads(context_text.split("\nUntrusted ", 1)[0])
     assets = packet.get("assets", [])
     paths = [arguments[i + 1] for i, value in enumerate(arguments[:-1]) if value == "--image"]
     observed = [hashlib.sha256(Path(path).read_bytes()).hexdigest() for path in paths]
@@ -28,16 +30,20 @@ def scalable_review(input_text, arguments, evidence):
                   "reasoning_effort": packet.get("reasoning_effort"),
                   "approved_plan_sha256": packet.get("approved_plan_sha256"),
                   "approved_plan_text_sha256": hashlib.sha256((packet.get("approved_plan") or "").encode()).hexdigest()})
+    source_regression = "[fixture:source-regression]" in instruction
     bad = next((file for file in packet.get("files", [])
-                if "VALUE = 0" in file.get("content", "")), None)
+                if "VALUE = 0" in file.get("content", "")
+                and (not source_regression or file["path"] == "app.py")), None)
     findings = []
-    if bad and "[fixture:reject-zero]" in instruction:
-        findings = [{"finding_id": "wrong-value", "path": bad["path"],
-                     "message": "Implementation must set VALUE to 1."}]
+    if bad and (source_regression or "[fixture:reject-zero]" in instruction):
+        findings = [{"finding_id": "publisher-regression" if source_regression else "wrong-value",
+                     "path": bad["path"],
+                     "message": ("Correct the publisher output and add the regression assertion."
+                                 if source_regression else
+                                 "Implementation must set VALUE to 1.")}]
     for receipt in packet.get("ordered_batch_receipts", []):
         if receipt["decision"] == "rejected":
             findings.extend(receipt["blocking_findings"])
-    binding.pop("ordered_image_attachments", None)
     Path(arguments[0]).with_name("started.pid").write_text(str(os.getpid()))
     gate = Path(arguments[0]).with_name("staged-review.gate")
     if "staged-automatic:" in instruction and packet.get("batch_index") == 0 and gate.exists():
@@ -49,9 +55,9 @@ def scalable_review(input_text, arguments, evidence):
     if "[fixture:malformed]" in instruction:
         print("{")
         sys.exit(0)
-    if "[fixture:wait]" in instruction and "review_batch_sha256" in binding:
+    if "[fixture:wait]" in instruction and "batch_index" in packet:
         time.sleep(20)
-    output = dict(binding, decision="rejected" if findings else "approved",
+    output = dict(decision="rejected" if findings else "approved",
                   blocking_findings=findings, non_blocking_findings=[])
     schema_path = arguments[arguments.index("--output-schema") + 1]
     properties = json.loads(Path(schema_path).read_text())["properties"]
@@ -59,14 +65,14 @@ def scalable_review(input_text, arguments, evidence):
         output["review_summary"] = "Fixture verified the exact assigned entries and attachment hashes; no unresolved interfaces."
     if "interfaces_and_dependencies" in properties:
         output["interfaces_and_dependencies"] = []
-    if ("[fixture:stale-batch]" in instruction or "[fixture:stale]" in instruction) and "review_batch_sha256" in output:
+    if ("[fixture:stale-batch]" in instruction or "[fixture:stale]" in instruction) and "batch_index" in packet:
         output["review_batch_sha256"] = "0" * 64
-    if "[fixture:omit-batch-entry]" in instruction and "review_batch_sha256" in output:
-        output["reviewed_entries"] = output["reviewed_entries"][:-1]
-    if "[fixture:stale-aggregate]" in instruction and "ordered_batch_receipt_sha256s" in output:
+    if "[fixture:omit-batch-entry]" in instruction and "batch_index" in packet:
+        output["reviewed_entries"] = context.get("reviewed_entries", [])[:-1]
+    if "[fixture:stale-aggregate]" in instruction and "ordered_batch_receipts" in packet:
         output["review_packet_sha256"] = "0" * 64
-    evidence({"kind": "review_batch" if assets or "review_batch_sha256" in output else "review_aggregate",
+    evidence({"kind": "review_aggregate" if "ordered_batch_receipts" in packet else "review_batch",
               "candidate_sha256": packet.get("aggregate_candidate_sha256"),
               "batch_index": packet.get("batch_index"), "batch_count": packet.get("batch_count"),
-              "entries": output.get("reviewed_entries", packet.get("candidate_manifest", [])), "image_sha256s": observed})
+              "entries": context.get("reviewed_entries", packet.get("candidate_manifest", [])), "image_sha256s": observed})
     return output
