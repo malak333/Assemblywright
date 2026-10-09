@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Native staged-to-ordinary repair lineage proof with real process boundaries."""
+"""Native staged repair routing proofs with real process boundaries."""
 
 from developer_opencode_runtime import provision_pinned_runtime
 from developer_planning_fixture import enqueue_with_plan
@@ -65,7 +65,15 @@ def main():
         default=os.environ.get("ASSEMBLYWRIGHT_DEVELOPER_OPENCODE_EXECUTABLE"))
     parser.add_argument("--candidate-rejection-route-only", action="store_true",
         help="prove source-review feedback survives a rejected protected candidate and routes directly to staged repair")
+    parser.add_argument("--protected-staged-retry-only", action="store_true",
+        help="prove a protected rejection after staged repair autonomously starts a second staged attempt")
+    parser.add_argument("--empty-staged-retry-only", action="store_true",
+        help="prove a completed clean empty stage consumes one attempt and autonomously starts a fresh staged attempt")
     args = parser.parse_args()
+    selected_modes = sum([args.candidate_rejection_route_only,
+        args.protected_staged_retry_only, args.empty_staged_retry_only])
+    if selected_modes > 1:
+        parser.error("select only one staged repair proof mode")
     binary = str(Path(args.binary).resolve())
     opencode = args.opencode_executable or provision_pinned_runtime(
         Path(__file__).resolve().parents[1])
@@ -75,6 +83,7 @@ def main():
 
     phases = []
     staged_feedback_observed = []
+    model_calls = []
 
     class Model(http.server.BaseHTTPRequestHandler):
         def log_message(self, *unused):
@@ -101,15 +110,19 @@ def main():
             if self.path != "/v1/chat/completions":
                 self.send_error(404)
                 return
+            model_calls.append(None)
             prompt = json.dumps(request.get("messages", []))
             if not request.get("tools"):
                 raise AssertionError("lineage fixture expected the real project-tool lane")
             tool_results = [message for message in request.get("messages", [])
                 if message.get("role") == "tool"]
+            staged_prompt = "Staged build environment:" in prompt
             if tool_results:
                 return model_reply(self, request,
                     {"content": "Completed the bounded project change."}, "stop")
             candidate_route = "candidate-rejection-route" in prompt
+            protected_staged_retry = "protected-staged-retry" in prompt
+            empty_staged_retry = "empty-staged-retry" in prompt
             if candidate_route and "repair attempt 1 of 3" in prompt.lower():
                 phase = "ordinary_protected_candidate"
                 code = ("from pathlib import Path; "
@@ -127,6 +140,43 @@ def main():
                 code = ("from pathlib import Path; Path('tests').mkdir(exist_ok=True); "
                     "Path('app.py').write_text('VALUE = 0\\n'); "
                     "Path('tests/test_site.py').write_text('assert True\\n')")
+            elif protected_staged_retry and "Staged build environment:" in prompt:
+                staged_attempt = 1 + sum(
+                    phase.startswith("protected_staged_") for phase in phases)
+                phase = f"protected_staged_{staged_attempt}"
+                if staged_attempt == 1:
+                    code = ("from pathlib import Path; "
+                        "Path('app.py').write_text('VALUE = 1\\n'); "
+                        "Path('tests/test_site.py').write_text('# VALUE = 0\\nassert True\\n'); "
+                        "Path('stage.txt').write_text('protected staged repair 1\\n')")
+                else:
+                    code = ("from pathlib import Path; "
+                        "Path('app.py').write_text('VALUE = 1\\n'); "
+                        "Path('tests/test_site.py').write_text('assert True\\n'); "
+                        "Path('stage.txt').write_text('protected staged repair 2\\n')")
+            elif protected_staged_retry:
+                phase = "protected_retry_initial"
+                code = ("from pathlib import Path; Path('tests').mkdir(exist_ok=True); "
+                    "Path('app.py').write_text('WRONG = 0\\n'); "
+                    "Path('tests/test_site.py').write_text('# VALUE = 0\\nassert True\\n')")
+            elif empty_staged_retry and staged_prompt:
+                staged_attempt = 1 + sum(
+                    phase.startswith("empty_staged_") for phase in phases)
+                phase = f"empty_staged_{staged_attempt}"
+                if staged_attempt == 1:
+                    code = ("from pathlib import Path; "
+                        "assert Path('tests/test_site.py').read_text(); "
+                        "assert Path('app.py').read_text()")
+                else:
+                    code = ("from pathlib import Path; "
+                        "Path('app.py').write_text('VALUE = 1\\n'); "
+                        "Path('tests/test_site.py').write_text('assert True\\n'); "
+                        "Path('stage.txt').write_text('fresh staged repair after empty\\n')")
+            elif empty_staged_retry:
+                phase = "empty_retry_initial"
+                code = ("from pathlib import Path; Path('tests').mkdir(exist_ok=True); "
+                    "Path('app.py').write_text('WRONG = 0\\n'); "
+                    "Path('tests/test_site.py').write_text('# VALUE = 0\\nassert True\\n')")
             elif "repair attempt 1 of 3" in prompt.lower():
                 phase = "ordinary_successor"
                 code = "from pathlib import Path; Path('app.py').write_text('VALUE = 1\\n')"
@@ -202,6 +252,33 @@ def main():
             with urllib.request.urlopen(request, timeout=15) as response:
                 return json.load(response)
 
+        def timeout_diagnostic(state, timeout):
+            queue = state.get("queue", []) if isinstance(state, dict) else []
+            feature = queue[0] if len(queue) == 1 else None
+            current = None if feature is None else {
+                key: feature.get(key) for key in [
+                    "status", "checkpoint", "auto_repair_lifecycle",
+                    "auto_repair_step_elapsed_ms", "repair_attempts",
+                    "escalation_count", "escalation_status", "review_attempts",
+                    "review_status", "tool_workspace_revision",
+                ]
+            }
+            global_state = None if not isinstance(state, dict) else {
+                key: state.get(key) for key in [
+                    "revision", "running", "emergency_paused", "repair_active",
+                    "escalation_running", "tools_running", "tools_need_attention",
+                ]
+            }
+            return {
+                "timeout_seconds": timeout,
+                "phase_count": len(phases),
+                "phases": list(phases),
+                "model_call_count": len(model_calls),
+                "state": global_state,
+                "feature": current,
+                "runner_log_bytes": log_path.stat().st_size if log_path.exists() else 0,
+            }
+
         def wait(predicate, timeout=150):
             deadline = time.monotonic() + timeout
             state = None
@@ -215,7 +292,8 @@ def main():
                 except OSError:
                     pass
                 time.sleep(.05)
-            raise AssertionError(f"Timed out: {state}\n{log_path.read_text(errors='replace')}")
+            raise AssertionError("Timed out: " + json.dumps(
+                timeout_diagnostic(state, timeout), sort_keys=True))
 
         try:
             deadline = time.monotonic() + 20
@@ -244,16 +322,24 @@ def main():
                     "expected_revision": permissions["revision"]})
             feature_id = str(uuid.uuid4())
             project_name = ("candidate-rejection-route"
-                if args.candidate_rejection_route_only else "lineage")
+                if args.candidate_rejection_route_only else
+                "protected-staged-retry" if args.protected_staged_retry_only else
+                "empty-staged-retry" if args.empty_staged_retry_only else "lineage")
             instruction = ((
                 "Build the candidate-rejection-route fixture "
                 "[fixture:source-regression]. The source correction must preserve the "
                 "existing protected regression input."
-            ) if args.candidate_rejection_route_only else (
+            ) if args.candidate_rejection_route_only else ((
+                "Build the protected-staged-retry fixture [fixture:reject-zero]. "
+                "Every protected blocker requires a fresh staged repair."
+            ) if args.protected_staged_retry_only else (
+                "Build the empty-staged-retry fixture [fixture:reject-zero]. "
+                "A clean completed empty attempt must consume its bound and continue."
+            ) if args.empty_staged_retry_only else (
                 "Build the lineage fixture [fixture:reject-zero]. "
                 "The first protected blocker requires staged repair; any later source "
                 "blocker must use ordinary repair."
-            ))
+            )))
             state = enqueue_with_plan(f"http://127.0.0.1:{port}", token, {
                 "id": feature_id, "project": project_name, "model_target": "windows",
                 "instruction": instruction,
@@ -263,17 +349,32 @@ def main():
                 "expected_model_target": feature["model_target"],
                 "expected_status": feature["status"],
                 "expected_checkpoint": feature["checkpoint"]})
+            workflow_timeout = 240 if (
+                args.protected_staged_retry_only or args.empty_staged_retry_only
+            ) else 150
             completed = wait(lambda state: not state["running"] and
                 next(item for item in state["queue"] if item["id"] == feature_id)["status"]
-                == "succeeded")
+                == "succeeded", timeout=workflow_timeout)
             public = next(item for item in completed["queue"] if item["id"] == feature_id)
-            assert public["repair_attempts"] == 1, public
-            assert public["escalation_count"] == 1, public
-            expected_review_attempts = 2 if args.candidate_rejection_route_only else 3
+            expected_repairs = 0 if (args.protected_staged_retry_only or
+                args.empty_staged_retry_only) else 1
+            expected_escalations = 2 if (args.protected_staged_retry_only or
+                args.empty_staged_retry_only) else 1
+            assert public["repair_attempts"] == expected_repairs, public
+            assert public["escalation_count"] == expected_escalations, public
+            expected_review_attempts = 2 if (
+                args.candidate_rejection_route_only or args.empty_staged_retry_only
+            ) else 3
             assert public["review_attempts"] == expected_review_attempts, public
             if args.candidate_rejection_route_only:
                 assert phases == ["candidate_route_initial", "ordinary_protected_candidate",
                     "candidate_rejection_staged_automatic"], phases
+            elif args.protected_staged_retry_only:
+                assert phases == ["protected_retry_initial", "protected_staged_1",
+                    "protected_staged_2"], phases
+            elif args.empty_staged_retry_only:
+                assert phases == ["empty_retry_initial", "empty_staged_1",
+                    "empty_staged_2"], phases
             else:
                 assert phases == [
                     "initial", "staged_automatic", "ordinary_successor"], phases
@@ -291,17 +392,20 @@ def main():
             feature = next(item for item in queue if item["id"] == feature_id)
             proposal = feature["escalation_proposal"]
             expected_proposal_status = ("succeeded"
-                if args.candidate_rejection_route_only else "failed")
+                if args.candidate_rejection_route_only or args.protected_staged_retry_only or
+                args.empty_staged_retry_only
+                else "failed")
             assert proposal["status"] == expected_proposal_status and proposal["staged_binding"]
             assert proposal["application_state_sha256"]
             receipts = [item for item in feature["escalation_history"]
                 if item["proposal_id"] == proposal["proposal_id"]]
             assert [item["outcome"] for item in receipts] == [
                 "ready", "policy_authorized", expected_proposal_status], receipts
-            repair = feature["repair_history"][0]
-            expected_prior_review = ("review_1_rejected"
-                if args.candidate_rejection_route_only else "review_2_rejected")
-            assert repair["prior_checkpoint"] == expected_prior_review, repair
+            if not args.protected_staged_retry_only and not args.empty_staged_retry_only:
+                repair = feature["repair_history"][0]
+                expected_prior_review = ("review_1_rejected"
+                    if args.candidate_rejection_route_only else "review_2_rejected")
+                assert repair["prior_checkpoint"] == expected_prior_review, repair
             if args.candidate_rejection_route_only:
                 assert "Correct the publisher output and add the regression assertion." in \
                     repair["prior_message"]
@@ -312,6 +416,43 @@ def main():
                     "rejected", "approved"]
                 assert proposal["feature_checkpoint"] == "staged_tool_candidate_rejected"
                 assert len(feature["repair_history"]) == 1
+            elif args.protected_staged_retry_only:
+                assert feature["repair_history"] == []
+                assert proposal["feature_checkpoint"] == "review_2_rejected"
+                assert [item["outcome"] for item in feature["review_history"]] == [
+                    "rejected", "rejected", "approved"]
+                assert [item["blocking_findings"][0]["path"]
+                    for item in feature["review_history"][:2]] == [
+                        "tests/test_site.py", "tests/test_site.py"]
+                proposal_receipts = {}
+                for receipt in feature["escalation_history"]:
+                    proposal_receipts.setdefault(receipt["proposal_id"], []).append(
+                        receipt["outcome"])
+                assert list(proposal_receipts.values()) == [
+                    ["ready", "policy_authorized", "failed"],
+                    ["ready", "policy_authorized", "succeeded"]], proposal_receipts
+            elif args.empty_staged_retry_only:
+                assert feature["repair_history"] == []
+                assert proposal["feature_checkpoint"] == "escalation_1_no_op"
+                assert [item["outcome"] for item in feature["review_history"]] == [
+                    "rejected", "not_run", "approved"]
+                proposal_receipts = {}
+                for receipt in feature["escalation_history"]:
+                    proposal_receipts.setdefault(receipt["proposal_id"], []).append(
+                        receipt["outcome"])
+                assert list(proposal_receipts.values()) == [
+                    ["no_op", "authorization_not_run", "application_not_run"],
+                    ["ready", "policy_authorized", "succeeded"]], proposal_receipts
+                with closing(sqlite3.connect(data / "developer.sqlite3")) as database:
+                    stage_rows = database.execute(
+                        "SELECT status,mutation_count,text_bytes,asset_bytes,serialized_bytes "
+                        "FROM developer_tool_stage WHERE project=? ORDER BY rowid",
+                        (project_name,)).fetchall()
+                    payload_count = database.execute(
+                        "SELECT COUNT(*) FROM developer_tool_stage_mutation").fetchone()[0]
+                assert stage_rows[0] == ("compacted", 0, 0, 0, 0), stage_rows
+                assert stage_rows[1][0] == "compacted" and stage_rows[1][1] > 0, stage_rows
+                assert payload_count == 0
             else:
                 feedback = json.loads(repair["prior_message"])
                 assert feedback["feedback"]["blocking_findings"][0]["path"] == "app.py"
@@ -388,8 +529,18 @@ def main():
             print(json.dumps({"platform": sys.platform,
                 "protected_review_routes_to_staged_automatic": True,
                 "staged_application_state_bound": True,
-                "source_only_review_routes_to_ordinary_successor": True,
-                "ordinary_successor_revalidated_and_freshly_reviewed": True,
+                "source_only_review_routes_to_ordinary_successor":
+                    not args.candidate_rejection_route_only and
+                    not args.protected_staged_retry_only and
+                    not args.empty_staged_retry_only,
+                "ordinary_successor_revalidated_and_freshly_reviewed":
+                    not args.candidate_rejection_route_only and
+                    not args.protected_staged_retry_only and
+                    not args.empty_staged_retry_only,
+                "protected_staged_rejection_autonomously_retries_staged":
+                    args.protected_staged_retry_only,
+                "completed_empty_stage_autonomously_retries_staged":
+                    args.empty_staged_retry_only,
                 "candidate_rejection_routes_before_ordinary_attempt_two":
                     args.candidate_rejection_route_only,
                 "candidate_rejection_preserves_exact_review_feedback":

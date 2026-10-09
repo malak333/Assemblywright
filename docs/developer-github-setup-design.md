@@ -33,15 +33,19 @@ An empty repository selection links to that repository's GitHub setup page and
 explains that it needs an initial README/base branch and protected required checks;
 it must not be presented as ready or silently supplied a fictional default branch.
 
-Selecting a repository fills its URL and base branch and suggests a bounded local
-project name. It does not make that repository a Developer project. The owner may
-explicitly create one empty directory directly under the configured Windows
+Selecting **Use project** fills its URL and base branch and, in the same owner action,
+requests one repository-named empty directory directly under the configured Windows
 workspace. The action accepts one ASCII alphanumeric, hyphen, or underscore path
 component of at most 80 characters. It never clones or imports the repository,
 downloads or uploads files, saves the GitHub connection, starts planning, enqueues
 a feature, or changes permissions. The new directory appears in the main feature,
-project-chat, and publication pickers while the selected repository draft remains
-available for the separate Save connection action.
+project-chat, and publication pickers, and the project-chat selection moves to it,
+while the selected repository draft remains available for the separate Save
+connection action. A local-project error leaves that draft and an explicit retry;
+retry invokes only `create_project` and cannot repeat repository creation.
+Save remains disabled until the authoritative `local_projects` projection contains
+the selected project. An idempotently observed directory may return its existing
+Windows spelling through one unique case-insensitive match; ambiguous matches reject.
 
 Local project creation is authenticated and bound to the exact runner revision. It
 uses the existing idle GitHub/setup exclusion and filesystem effect gate, rechecks
@@ -55,11 +59,22 @@ directory is removed or rollback failure is reported instead of success.
 
 Create repository is a separate explicit action: the owner chooses a valid name
 and public/private visibility (private initially selected) and confirms the exact
-account/name/visibility before any request. Initial creation is limited to the
+account/name/visibility and the matching local-project handoff before any request.
+Initial creation is limited to the
 authenticated user's account. It initializes a README/base branch and never uploads
 project files. Creation is distinct from connecting or publishing a feature.
 The UI reports successful creation even if subsequent publication prerequisites
 still need setup; it does not weaken the existing strict app-bound checks policy.
+
+The Mac records the client-generated creation operation as the only eligible handoff.
+An immediate `succeeded` response or a later observed/reconciled `succeeded` state
+may start local `create_project` only when operation ID, account, repository name,
+visibility, canonical URL, immutable repository ID, and valid default branch match.
+Cached unrelated success, `creating`, `attention`, collision (`existing`), or observed
+absence never starts the handoff. The runner status is refreshed before the
+revision-bound local request; stale, busy, paused, running, cancelled, or unresolved
+state fails closed. GitHub cancellation/reconciliation remains authoritative and no
+local retry repeats the remote creation effect.
 
 Creation has a durable operation ID and frozen expected account/target/visibility before the external
 request. A collision cannot silently adopt an existing repository. Uncertain results

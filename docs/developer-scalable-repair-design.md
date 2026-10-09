@@ -376,3 +376,34 @@ immutable validation and independent review.
 - Exact deployed Windows binary/source evidence and explicit recovery outcome.
   No hosted publication, signing, notarization, or production readiness is
   implied by local Developer evidence.
+
+
+### Repeated protected review rejection
+
+When a fully applied automatic staged candidate receives a terminal rejected
+review with protected findings, its exact cumulative candidate, terminal
+application receipt, ordered review binding, and validation evidence authorize
+a fresh staged repair opportunity under the already enabled owner policy.
+The scheduler must retain its process-level authorization while the durable
+feature lifecycle remains running; being an escalation predecessor alone does
+not revoke that policy. Source-only findings keep the ordinary successor route.
+Disabled policy, cancellation, nonrunning lifecycle, malformed receipts, or
+changed bytes cannot authorize either automatic route. The next staged proposal
+uses a new attempt reservation rather than replaying a terminal application.
+
+### Completed empty preparation
+
+After successful bound execution, live/protected fingerprint verification, raw
+mutation retrieval, and stage cleanup, an empty raw mutation ledger with zero
+mutation/text/asset counts can produce the existing effect-free `no_op` outcome.
+This consumes a capped attempt and permits a fresh automatic preparation under
+current policy and running lifecycle. A nonempty ledger that reduces to no edits
+is not this outcome. Provider failures, missing or changed bindings, cleanup
+failures, drift, and cancellation retain their held recovery behavior.
+
+The successor verifies exact no-op proposal, authorization, interruption, stage,
+failure-evidence, cumulative candidate, and unused application/review provenance.
+Only the effect-free terminal `not_run` review reservation is excluded when
+checking the successor's uniqueness; actual reviews remain immutable. Stage
+compaction must be idempotent during restart recovery so a completed clean stage
+does not require Resume solely because a crash preceded archive compaction.

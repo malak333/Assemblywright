@@ -1593,6 +1593,17 @@ fn automatic_staged_review_required(
         }
         return Ok(true);
     }
+    if terminal_clean_empty_staged_no_op_review_checkpoint(feature)? == Some(checkpoint) {
+        let proposal = feature
+            .escalation_proposal
+            .as_ref()
+            .context("Terminal empty staged no-op proposal disappeared")?;
+        let mut predecessor = feature.clone();
+        predecessor
+            .review_history
+            .retain(|review| !(review.attempt == proposal.attempt && review.outcome == "not_run"));
+        return review_rejection_requires_staged_automatic(&predecessor, checkpoint, project);
+    }
     review_rejection_requires_staged_automatic(feature, checkpoint, project)
 }
 
@@ -1629,7 +1640,12 @@ fn automatic_staged_review_checkpoint(feature: &Feature) -> Option<&str> {
         return None;
     }
     if feature.last_failure_kind == "review_rejection" {
-        return Some(feature.checkpoint.as_str());
+        if feature.checkpoint.starts_with("review_") && feature.checkpoint.ends_with("_rejected") {
+            return Some(feature.checkpoint.as_str());
+        }
+        return terminal_clean_empty_staged_no_op_review_checkpoint(feature)
+            .ok()
+            .flatten();
     }
     if feature.last_failure_kind == "candidate_rejection"
         && matches!(
@@ -1646,6 +1662,113 @@ fn automatic_staged_review_checkpoint(feature: &Feature) -> Option<&str> {
         });
     }
     None
+}
+
+fn terminal_clean_empty_staged_no_op(feature: &Feature) -> Result<Option<&StagedCandidateBinding>> {
+    let Some(proposal) = feature.escalation_proposal.as_ref() else {
+        return Ok(None);
+    };
+    if proposal.status != "no_op" {
+        return Ok(None);
+    }
+    let Some(binding) = proposal.staged_binding.as_ref() else {
+        return Ok(None);
+    };
+    if feature.status != "failed"
+        || feature.auto_repair_lifecycle != "running"
+        || feature.escalation_pending
+        || feature.repair_pending
+        || feature.review_pending.is_some()
+        || feature.checkpoint != format!("escalation_{}_no_op", proposal.attempt)
+        || feature.escalation_count != proposal.attempt
+        || proposal.source != "automatic_failure"
+        || proposal.feature_id != feature.id
+        || proposal.automatic_epoch != Some(feature.auto_repair_epoch)
+        || proposal.policy_revision != feature.auto_repair_policy_revision
+        || proposal.limit_snapshot != feature.auto_ai_repair_limit
+        || proposal.model_target != feature.model_target
+        || binding.execution.model_target != proposal.model_target
+        || binding.execution.model != proposal.model
+        || !matches!(
+            binding.execution.access_mode,
+            ToolAccessMode::Auto | ToolAccessMode::Full
+        )
+        || binding.execution.stage.project != feature.project
+        || binding.execution.stage.proposal_id.as_deref() != Some(proposal.proposal_id.as_str())
+        || binding.execution.stage.feature_id != feature.id
+        || binding.execution.stage.automatic_epoch != feature.auto_repair_epoch
+        || !proposal.files.is_empty()
+        || !proposal.staged_candidate.is_empty()
+        || !proposal.staged_candidate_manifest.is_empty()
+        || !proposal.applied_paths.is_empty()
+        || proposal.apply_request_id.is_some()
+        || proposal.application_state_sha256.is_some()
+        || !completed_empty_staged_candidate_has_zero_mutation_evidence(
+            &[],
+            &binding.mutation_summary,
+        )
+    {
+        bail!("Terminal empty staged no-op evidence is incomplete or changed");
+    }
+    let (_, blocking_findings_sha256, review_packet_sha256, validation_evidence_sha256) =
+        staged_failure_evidence_binding(feature)?;
+    if binding.blocking_findings_sha256 != blocking_findings_sha256
+        || binding.review_packet_sha256 != review_packet_sha256
+        || binding.validation_evidence_sha256 != validation_evidence_sha256
+    {
+        bail!("Terminal empty staged no-op failure evidence binding changed");
+    }
+    for digest in [
+        &binding.live_effect_state_sha256,
+        &binding.blocking_findings_sha256,
+        &binding.review_packet_sha256,
+        &binding.validation_evidence_sha256,
+    ] {
+        validate_sha256(digest, "terminal empty staged no-op binding digest")?;
+    }
+    validate_exact_current_snapshot_terminal_provenance(feature, proposal)?;
+    Ok(Some(binding))
+}
+
+fn terminal_clean_empty_staged_no_op_review_checkpoint(feature: &Feature) -> Result<Option<&str>> {
+    if terminal_clean_empty_staged_no_op(feature)?.is_none() {
+        return Ok(None);
+    }
+    if feature.last_failure_kind != "review_rejection" {
+        bail!("Terminal empty staged no-op has no review-rejection discriminator");
+    }
+    let proposal = feature
+        .escalation_proposal
+        .as_ref()
+        .context("Terminal empty staged no-op proposal disappeared")?;
+    let candidate_sha256 = repair_escalation_candidate_sha256(proposal)?;
+    let no_op_reviews = feature
+        .review_history
+        .iter()
+        .filter(|review| review.attempt == proposal.attempt && review.outcome == "not_run")
+        .collect::<Vec<_>>();
+    if no_op_reviews.len() != 1
+        || no_op_reviews[0].binding_version != 0
+        || no_op_reviews[0].decision_sha256.is_some()
+        || !no_op_reviews[0].batch_packet_sha256s.is_empty()
+        || !no_op_reviews[0].batch_receipt_sha256s.is_empty()
+        || !no_op_reviews[0].blocking_findings.is_empty()
+        || no_op_reviews[0].packet_sha256 != candidate_sha256
+        || no_op_reviews[0].validation_evidence_sha256 != proposal.diagnosis_sha256
+    {
+        bail!("Terminal empty staged no-op review-not-run evidence is incomplete or duplicated");
+    }
+    let mut predecessor = feature.clone();
+    predecessor
+        .review_history
+        .retain(|review| !(review.attempt == proposal.attempt && review.outcome == "not_run"));
+    validated_rejected_review_for_checkpoint_evidence(
+        &predecessor,
+        &proposal.feature_checkpoint,
+        true,
+    )?
+    .context("Terminal empty staged no-op has no exact rejected-review predecessor")?;
+    Ok(Some(proposal.feature_checkpoint.as_str()))
 }
 
 fn terminal_failed_staged_proposal(feature: &Feature) -> Result<&RepairEscalationProposal> {
@@ -1727,17 +1850,61 @@ fn rejected_review_repair_message(review: &ReviewAttemptEvidence) -> Result<Stri
     Ok(message)
 }
 
+enum TerminalStagedReviewRepairRoute {
+    Ordinary(String),
+    StagedAutomatic,
+}
+
+fn terminal_staged_review_repair_route(
+    feature: &Feature,
+    checkpoint: &str,
+    project: &Path,
+    candidate: &[Edit],
+) -> Result<TerminalStagedReviewRepairRoute> {
+    let review = terminal_failed_staged_review_rejection(feature, checkpoint, project, candidate)?;
+    if review_rejection_requires_staged_automatic(feature, checkpoint, project)? {
+        return Ok(TerminalStagedReviewRepairRoute::StagedAutomatic);
+    }
+    Ok(TerminalStagedReviewRepairRoute::Ordinary(
+        rejected_review_repair_message(review)?,
+    ))
+}
+
 fn source_only_terminal_staged_review_repair_message(
     feature: &Feature,
     checkpoint: &str,
     project: &Path,
     candidate: &[Edit],
 ) -> Result<Option<String>> {
-    let review = terminal_failed_staged_review_rejection(feature, checkpoint, project, candidate)?;
-    if review_rejection_requires_staged_automatic(feature, checkpoint, project)? {
-        return Ok(None);
+    match terminal_staged_review_repair_route(feature, checkpoint, project, candidate)? {
+        TerminalStagedReviewRepairRoute::Ordinary(message) => Ok(Some(message)),
+        TerminalStagedReviewRepairRoute::StagedAutomatic => Ok(None),
     }
-    Ok(Some(rejected_review_repair_message(review)?))
+}
+
+fn completed_empty_staged_candidate_has_zero_mutation_evidence(
+    mutations: &[ToolProjectMutation],
+    summary: &ToolStageMutationSummary,
+) -> bool {
+    mutations.is_empty()
+        && summary.mutation_count == 0
+        && summary.text_bytes == 0
+        && summary.asset_bytes == 0
+        && summary.serialized_bytes == 0
+}
+
+fn terminal_staged_review_continuation_authorized(
+    route: Option<&TerminalStagedReviewRepairRoute>,
+    auto_policy_enabled: bool,
+    auto_repair_lifecycle: &str,
+    cancelled: bool,
+) -> bool {
+    matches!(
+        route,
+        Some(TerminalStagedReviewRepairRoute::StagedAutomatic)
+    ) && auto_policy_enabled
+        && auto_repair_lifecycle == "running"
+        && !cancelled
 }
 
 const TERMINAL_STAGED_REVIEW_RESUME_DEFECT_PREFIX: &str =
@@ -6258,7 +6425,12 @@ impl Engine {
                 staged_candidate: edits.clone(),
                 ..Default::default()
             })?;
-            if edits.is_empty() {
+            if edits.is_empty()
+                && !completed_empty_staged_candidate_has_zero_mutation_evidence(
+                    &mutations,
+                    &mutation_summary,
+                )
+            {
                 bail!(
                     "Selected Windows model produced no staged implementation or generated output"
                 );
@@ -6633,6 +6805,19 @@ impl Engine {
             if !project.starts_with(&self.root) {
                 bail!("Project escapes the workspace root");
             }
+            if let Some(staged) = terminal_clean_empty_staged_no_op(&observed)? {
+                self.tools
+                    .compact_stage(&staged.execution.stage, &staged.mutation_summary)?;
+                self.tools
+                    .verify_stage_archive(&staged.execution.stage, &staged.mutation_summary)?;
+                self.tools.verify_execution_binding(&staged.execution)?;
+                let live_effect = self
+                    .tools
+                    .project_effect_snapshot(&observed.project, Some(&self.cancellation))?;
+                if live_effect.sha256 != staged.live_effect_state_sha256 {
+                    bail!("Terminal empty staged no-op live effect binding changed");
+                }
+            }
             let early_staged_review = if observed.repair_attempts < REPAIR_LIMIT {
                 let checkpoint = automatic_staged_review_checkpoint(&observed).context(
                     "Ordinary repair attempts must be exhausted before automatic escalation",
@@ -6702,6 +6887,28 @@ impl Engine {
                 || feature.auto_repair_policy_revision != Some(policy_revision)
             {
                 bail!("Automatic repair escalation binding changed during preparation");
+            }
+            if terminal_clean_empty_staged_no_op(&observed)?.is_some() {
+                let current_binding = terminal_clean_empty_staged_no_op(feature)?.context(
+                    "Terminal empty staged no-op changed during successor preparation",
+                )?;
+                let observed_binding = observed
+                    .escalation_proposal
+                    .as_ref()
+                    .and_then(|proposal| proposal.staged_binding.as_ref())
+                    .context("Observed terminal empty staged no-op binding disappeared")?;
+                if serde_json::to_vec(current_binding)? != serde_json::to_vec(observed_binding)?
+                    || feature
+                        .escalation_proposal
+                        .as_ref()
+                        .map(|proposal| proposal.proposal_id.as_str())
+                        != observed
+                            .escalation_proposal
+                            .as_ref()
+                            .map(|proposal| proposal.proposal_id.as_str())
+                {
+                    bail!("Terminal empty staged no-op binding changed during preparation");
+                }
             }
             if feature.repair_attempts < REPAIR_LIMIT {
                 let checkpoint = automatic_staged_review_checkpoint(feature).context(
@@ -9385,10 +9592,10 @@ impl Engine {
                             )?;
                         }
                     }
-                    let terminal_source_only_repair = if let Some(project) =
+                    let terminal_staged_review_route = if let Some(project) =
                         terminal_staged_review_project.as_deref()
                     {
-                        match source_only_terminal_staged_review_repair_message(
+                        match terminal_staged_review_repair_route(
                             current,
                             &current.checkpoint,
                             project,
@@ -9396,7 +9603,7 @@ impl Engine {
                                 "Terminal staged rejection has no cumulative candidate",
                             )?,
                         ) {
-                            Ok(message) => message,
+                            Ok(route) => Some(route),
                             Err(error) => {
                                 terminal_staged_review_invalid = Some(format!("{error:#}"));
                                 if current.auto_repair_lifecycle == "running" {
@@ -9412,9 +9619,18 @@ impl Engine {
                     } else {
                         None
                     };
-                    if review_rejection && !self.cancelled() {
-                        self.repair_loop_authorized
-                            .store(!escalation_attempt, Ordering::SeqCst);
+                    if review_rejection {
+                        let staged_continuation =
+                            terminal_staged_review_continuation_authorized(
+                                terminal_staged_review_route.as_ref(),
+                                auto_policy_enabled,
+                                &current.auto_repair_lifecycle,
+                                self.cancelled(),
+                            );
+                        self.repair_loop_authorized.store(
+                            (!escalation_attempt && !self.cancelled()) || staged_continuation,
+                            Ordering::SeqCst,
+                        );
                     }
                     let starts_early_staged_review = early_staged_review_selected
                         && auto_policy_enabled
@@ -9428,13 +9644,21 @@ impl Engine {
                             )?;
                         }
                         Ok(false)
-                    } else if terminal_source_only_repair.is_some()
+                    } else if matches!(
+                        terminal_staged_review_route.as_ref(),
+                        Some(TerminalStagedReviewRepairRoute::Ordinary(_))
+                    )
                         && auto_policy_enabled
                         && current.auto_repair_lifecycle == "running"
                         && !self.cancelled()
                         && current.repair_attempts < REPAIR_LIMIT
                     {
-                        current.message = terminal_source_only_repair.unwrap();
+                        let Some(TerminalStagedReviewRepairRoute::Ordinary(message)) =
+                            terminal_staged_review_route
+                        else {
+                            unreachable!("ordinary terminal route was checked above");
+                        };
+                        current.message = message;
                         reserve_repair_attempt(current)?;
                         Ok(true)
                     } else if !starts_early_staged_review
@@ -24265,6 +24489,54 @@ mod tests {
     }
 
     #[test]
+    fn protected_terminal_staged_review_continuation_requires_live_authority() {
+        let (_directory, engine) = control_test_engine();
+        let project = engine.root.join("example");
+        let mut feature = terminal_staged_source_rejection_fixture(&engine);
+        feature.review_history.last_mut().unwrap().blocking_findings[0].path =
+            "tests/test_first.py".into();
+
+        let route = terminal_staged_review_repair_route(
+            &feature,
+            &feature.checkpoint,
+            &project,
+            feature.edits.as_deref().unwrap(),
+        )
+        .unwrap();
+        assert!(matches!(
+            route,
+            TerminalStagedReviewRepairRoute::StagedAutomatic
+        ));
+        assert!(terminal_staged_review_continuation_authorized(
+            Some(&route),
+            true,
+            "running",
+            false,
+        ));
+        assert!(!terminal_staged_review_continuation_authorized(
+            Some(&route),
+            false,
+            "running",
+            false,
+        ));
+        assert!(!terminal_staged_review_continuation_authorized(
+            Some(&route),
+            true,
+            "held",
+            false,
+        ));
+        assert!(!terminal_staged_review_continuation_authorized(
+            Some(&route),
+            true,
+            "running",
+            true,
+        ));
+        assert!(!terminal_staged_review_continuation_authorized(
+            None, true, "running", false,
+        ));
+    }
+
+    #[test]
     fn terminal_staged_source_rejection_rejects_receipt_packet_and_feedback_drift() {
         let (_directory, engine) = control_test_engine();
         let project = engine.root.join("example");
@@ -27937,6 +28209,344 @@ mod tests {
         assert!(protected.contains(&"tests/**".into()));
         assert!(protected.contains(&"qa/acceptance.py".into()));
         assert!(protected.contains(&"qa/acceptance.py/**".into()));
+    }
+
+    #[test]
+    fn empty_staged_candidate_requires_an_exact_zero_mutation_ledger() {
+        let zero = ToolStageMutationSummary {
+            mutation_sha256: hash(b"fixture empty mutation ledger"),
+            mutation_count: 0,
+            text_bytes: 0,
+            asset_bytes: 0,
+            serialized_bytes: 0,
+        };
+        assert!(completed_empty_staged_candidate_has_zero_mutation_evidence(
+            &[],
+            &zero,
+        ));
+
+        let mutation = ToolProjectMutation {
+            revision: 1,
+            request_id: Uuid::new_v4().to_string(),
+            feature_id: Some("feature-1".into()),
+            edits: Vec::new(),
+            unreviewable_paths: vec!["<malformed-nonempty-ledger>".into()],
+        };
+        assert!(!completed_empty_staged_candidate_has_zero_mutation_evidence(&[mutation], &zero,));
+
+        for field in [
+            "mutation_count",
+            "text_bytes",
+            "asset_bytes",
+            "serialized_bytes",
+        ] {
+            let mut nonzero = zero.clone();
+            match field {
+                "mutation_count" => nonzero.mutation_count = 1,
+                "text_bytes" => nonzero.text_bytes = 1,
+                "asset_bytes" => nonzero.asset_bytes = 1,
+                "serialized_bytes" => nonzero.serialized_bytes = 1,
+                _ => unreachable!(),
+            }
+            assert!(
+                !completed_empty_staged_candidate_has_zero_mutation_evidence(&[], &nonzero),
+                "{field} must remain fail closed"
+            );
+        }
+    }
+
+    fn complete_zero_ledger_staged_no_op(
+        engine: &Arc<Engine>,
+        feature_id: &str,
+        access_revision: u64,
+    ) -> (ToolStageBinding, ToolStageMutationSummary) {
+        let feature = engine
+            .database
+            .lock()
+            .unwrap()
+            .state
+            .queue
+            .iter()
+            .find(|feature| feature.id == feature_id)
+            .unwrap()
+            .clone();
+        let proposal = feature.escalation_proposal.as_ref().unwrap();
+        let stage = ToolStageBinding {
+            scope_id: Uuid::new_v4().to_string(),
+            project: feature.project.clone(),
+            stage_project: format!("aw-repair-stage-{}", Uuid::new_v4().simple()),
+            request_id: Uuid::new_v4().to_string(),
+            feature_id: feature.id.clone(),
+            proposal_id: Some(proposal.proposal_id.clone()),
+            automatic_epoch: feature.auto_repair_epoch,
+        };
+        engine.tools.register_stage(&stage).unwrap();
+        engine.tools.mark_stage_cleanup_pending(&stage).unwrap();
+        engine.tools.complete_stage_cleanup(&stage, true).unwrap();
+        let mutation_summary = engine.tools.stage_mutation_summary(&stage).unwrap();
+        assert!(completed_empty_staged_candidate_has_zero_mutation_evidence(
+            &[],
+            &mutation_summary,
+        ));
+        let (_, blocking_findings_sha256, review_packet_sha256, validation_evidence_sha256) =
+            staged_failure_evidence_binding(&feature).unwrap();
+        let live_effect = engine
+            .tools
+            .project_effect_snapshot(&feature.project, None)
+            .unwrap();
+        let model = ToolModelConfig {
+            target: proposal.model_target.clone(),
+            url: engine
+                .model_targets
+                .iter()
+                .find(|target| target.id == proposal.model_target)
+                .unwrap()
+                .url
+                .clone(),
+            model: proposal.model.clone(),
+        };
+        let binding = StagedCandidateBinding {
+            execution: ToolExecutionBinding {
+                stage: stage.clone(),
+                access_mode: developer_tools::ToolAccessMode::Full,
+                access_revision,
+                runtime_sha256: "1".repeat(64),
+                tool_catalog_sha256: developer_tools::test_tool_catalog_sha256(
+                    &model,
+                    developer_tools::ToolAccessMode::Full,
+                    &[],
+                )
+                .unwrap(),
+                model_target: model.target,
+                model_url: model.url,
+                model: model.model,
+                forbidden_write_paths: Vec::new(),
+            },
+            mutation_summary: mutation_summary.clone(),
+            live_effect_state_sha256: live_effect.sha256,
+            blocking_findings_sha256,
+            review_packet_sha256,
+            validation_evidence_sha256,
+        };
+        engine
+            .finish_escalation_proposal(
+                feature_id,
+                &proposal.proposal_id,
+                Ok((
+                    "Completed without project mutations".into(),
+                    Vec::new(),
+                    Vec::new(),
+                    Some(binding),
+                    Default::default(),
+                )),
+                &AtomicU8::new(0),
+            )
+            .unwrap();
+        assert!(terminal_clean_empty_staged_no_op(
+            engine
+                .database
+                .lock()
+                .unwrap()
+                .state
+                .queue
+                .iter()
+                .find(|feature| feature.id == feature_id)
+                .unwrap(),
+        )
+        .unwrap()
+        .is_some());
+        (stage, mutation_summary)
+    }
+
+    #[test]
+    fn cleaned_zero_ledger_no_op_restart_compacts_before_successor_for_both_routes() {
+        for early_review_route in [false, true] {
+            let (directory, engine) = control_test_engine();
+            let mut feature = if early_review_route {
+                let mut feature = terminal_staged_source_rejection_fixture(&engine);
+                feature.review_history.last_mut().unwrap().blocking_findings[0].path =
+                    "tests/test_first.py".into();
+                let (_, blocking, packet, validation) =
+                    staged_failure_evidence_binding(&feature).unwrap();
+                let binding = feature
+                    .escalation_proposal
+                    .as_mut()
+                    .unwrap()
+                    .staged_binding
+                    .as_mut()
+                    .unwrap();
+                binding.blocking_findings_sha256 = blocking;
+                binding.review_packet_sha256 = packet;
+                binding.validation_evidence_sha256 = validation;
+                feature
+            } else {
+                let mut feature = feature_with_status("failed");
+                feature.repair_attempts = REPAIR_LIMIT;
+                feature.repair_history = (1..=REPAIR_LIMIT)
+                    .map(|attempt| RepairAttemptEvidence {
+                        attempt,
+                        prior_checkpoint: format!("repair_{}_failed", attempt - 1),
+                        prior_message: "retained validation failure".into(),
+                        prior_edits: Vec::new(),
+                    })
+                    .collect();
+                feature.last_failure_kind = "validation_failure".into();
+                feature.last_code_failure_summary = "retained validation failure".into();
+                feature
+            };
+            let access_revision = if early_review_route {
+                2
+            } else {
+                engine.tools.set_global_access("full", 1, true).unwrap()["revision"]
+                    .as_u64()
+                    .unwrap()
+            };
+            feature.auto_ai_repair_limit = Some(100);
+            feature.auto_repair_policy_revision = Some(7);
+            set_auto_repair_lifecycle(&mut feature, "running", "fixture").unwrap();
+            let feature_id = feature.id.clone();
+            engine
+                .change(|state| {
+                    state.auto_ai_repair_enabled = true;
+                    state.auto_ai_repair_max_escalations = 100;
+                    state.auto_ai_repair_policy_revision = 7;
+                    state.queue[0] = feature.clone();
+                    Ok(())
+                })
+                .unwrap();
+            engine
+                .reserve_automatic_escalation(&feature_id)
+                .unwrap()
+                .expect("fixture must reserve the empty staged attempt");
+            let (stage, _) =
+                complete_zero_ledger_staged_no_op(&engine, &feature_id, access_revision);
+
+            if early_review_route {
+                let mut missing_staged_binding =
+                    engine.database.lock().unwrap().state.queue[0].clone();
+                missing_staged_binding
+                    .escalation_proposal
+                    .as_mut()
+                    .unwrap()
+                    .staged_binding = None;
+                assert!(terminal_clean_empty_staged_no_op(&missing_staged_binding)
+                    .unwrap()
+                    .is_none());
+                assert!(automatic_staged_review_checkpoint(&missing_staged_binding).is_none());
+            }
+
+            let connection =
+                Connection::open(directory.path().join("data/developer.sqlite3")).unwrap();
+            connection
+                .execute(
+                    "UPDATE developer_tool_stage SET status='cleaned' WHERE scope_id=?1",
+                    [&stage.scope_id],
+                )
+                .unwrap();
+            drop(connection);
+
+            let error = match engine.reserve_automatic_escalation(&feature_id) {
+                Err(error) => error,
+                Ok(_) => panic!("fixture without a tool runtime unexpectedly reserved a successor"),
+            };
+            assert!(
+                error
+                    .to_string()
+                    .contains("OpenCode tools are not provisioned"),
+                "{error:#}"
+            );
+            let connection =
+                Connection::open(directory.path().join("data/developer.sqlite3")).unwrap();
+            let status: String = connection
+                .query_row(
+                    "SELECT status FROM developer_tool_stage WHERE scope_id=?1",
+                    [&stage.scope_id],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(status, "compacted");
+            let current = &engine.database.lock().unwrap().state.queue[0];
+            assert_eq!(
+                current.escalation_count,
+                if early_review_route { 2 } else { 1 }
+            );
+            assert_eq!(
+                current.checkpoint,
+                if early_review_route {
+                    "escalation_2_no_op"
+                } else {
+                    "escalation_1_no_op"
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn terminal_clean_empty_staged_no_op_rejects_provenance_and_ledger_drift() {
+        let (_directory, engine) = control_test_engine();
+        let access_revision = engine.tools.set_global_access("full", 1, true).unwrap()["revision"]
+            .as_u64()
+            .unwrap();
+        engine
+            .change(|state| {
+                state.auto_ai_repair_enabled = true;
+                state.auto_ai_repair_max_escalations = 3;
+                state.auto_ai_repair_policy_revision = 7;
+                let feature = &mut state.queue[0];
+                feature.repair_attempts = REPAIR_LIMIT;
+                feature.repair_history = (1..=REPAIR_LIMIT)
+                    .map(|attempt| RepairAttemptEvidence {
+                        attempt,
+                        prior_checkpoint: format!("repair_{}_failed", attempt - 1),
+                        prior_message: "retained validation failure".into(),
+                        prior_edits: Vec::new(),
+                    })
+                    .collect();
+                feature.last_failure_kind = "validation_failure".into();
+                feature.last_code_failure_summary = "retained validation failure".into();
+                feature.auto_ai_repair_limit = Some(3);
+                feature.auto_repair_policy_revision = Some(7);
+                set_auto_repair_lifecycle(feature, "running", "fixture")
+            })
+            .unwrap();
+        let feature_id = engine.database.lock().unwrap().state.queue[0].id.clone();
+        engine
+            .reserve_automatic_escalation(&feature_id)
+            .unwrap()
+            .unwrap();
+        complete_zero_ledger_staged_no_op(&engine, &feature_id, access_revision);
+        let exact = engine.database.lock().unwrap().state.queue[0].clone();
+
+        for drift in [
+            "execution",
+            "live",
+            "blocking",
+            "review",
+            "validation",
+            "ledger",
+        ] {
+            let mut changed = exact.clone();
+            let binding = changed
+                .escalation_proposal
+                .as_mut()
+                .unwrap()
+                .staged_binding
+                .as_mut()
+                .unwrap();
+            match drift {
+                "execution" => binding.execution.model.push_str("-changed"),
+                "live" => binding.live_effect_state_sha256 = "invalid".into(),
+                "blocking" => binding.blocking_findings_sha256 = "a".repeat(64),
+                "review" => binding.review_packet_sha256 = "a".repeat(64),
+                "validation" => binding.validation_evidence_sha256 = "a".repeat(64),
+                "ledger" => binding.mutation_summary.serialized_bytes = 1,
+                _ => unreachable!(),
+            }
+            assert!(
+                terminal_clean_empty_staged_no_op(&changed).is_err(),
+                "{drift} drift must remain held"
+            );
+        }
     }
 
     #[test]

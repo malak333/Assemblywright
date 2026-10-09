@@ -87,7 +87,7 @@ and Git coverage:
 ```sh
 cargo test -p assemblywright-master --bin assemblywright-developer
 cargo build -p assemblywright-master --bin assemblywright-developer --example developer_review_fixture --example developer_github_fixture
-swift test --disable-sandbox --package-path apps/mac --filter 'DeveloperGitHubSetupTests|DeveloperGitHubTests|DeveloperRunnerTests'
+swift test --disable-sandbox --package-path apps/mac --filter 'DeveloperGitHubSetupTests|DeveloperGitHubTests|DeveloperRunnerTests|DeveloperRunnerClientTests'
 python3 scripts/developer-runner-publication-e2e.py --binary target/debug/assemblywright-developer --github-fixture target/debug/examples/developer_github_fixture
 python3 scripts/developer-runner-github-setup-e2e.py --binary target/debug/assemblywright-developer --github-fixture target/debug/examples/developer_github_fixture
 python3 scripts/developer-runner-settings-e2e.py --binary target/debug/assemblywright-developer
@@ -99,6 +99,12 @@ idempotent observation, the empty-directory guarantee, and agreement between the
 runner `local_projects` projection and `GET /chat/projects`. It uses no live GitHub
 credentials and is not signing, notarization, installed-device, or external
 publication proof.
+
+The Swift native HTTP/model tests cover the repository-to-project handoff: exact
+new-repository operation completion, cached unrelated creation rejection, refreshed
+runner revision before create-only local registration, and stale/busy/error recovery.
+The resulting project reaches the main feature and chat pickers only after Windows
+acknowledges it. Repository selection does not save a publication connection.
 
 The publication native E2E also creates an unresolved PR, proves abandonment rejects
 open, merged, missing, and head-drifted observations, proves Stop leaves the attention
@@ -178,19 +184,26 @@ real HTTP, filesystem and SQLite boundaries with fixture model responses:
 ```sh
 python3 -B scripts/developer-runner-staged-repair-e2e.py --binary target/debug/assemblywright-developer
 python3 -B scripts/developer-runner-staged-repair-e2e.py --binary target/debug/assemblywright-developer --candidate-rejection-route-only
+python3 -B scripts/developer-runner-staged-repair-e2e.py --binary target/debug/assemblywright-developer --protected-staged-retry-only
+python3 -B scripts/developer-runner-staged-repair-e2e.py --binary target/debug/assemblywright-developer --empty-staged-retry-only
 cargo test -p assemblywright-master --bin assemblywright-developer terminal_staged -- --nocapture
 ```
 
 It forces protected review rejection, staged automatic application, a second
 source-only rejection, ordinary successor repair, fresh validation and a third
 approved review. It asserts the staged application-state binding and immutable
-receipt ancestry. The canonical `developer_workflow_e2e` test includes both modes of this
+receipt ancestry. The canonical `developer_workflow_e2e` test includes all four modes of this
 harness. The candidate-rejection mode starts with a source-file review finding
 that requests a regression assertion, rejects an ordinary protected-test
 candidate without applying it, and routes directly to staged repair before a
 second ordinary attempt. It retains nonempty cumulative edits, preserves exact
 review feedback, and separately proves that malformed predecessor linkage holds
-without another model call or write. On Windows, first build `developer_review_fixture` with
+without another model call or write. The protected-staged-retry mode rejects the
+first staged candidate on protected findings, then requires a second staged
+application and fresh approval without Resume. The empty-staged-retry mode proves
+that a completed, bound, effect-free stage consumes its attempt as `no_op` and
+reserves a fresh attempt without Resume. Unknown or failed executions remain held.
+On Windows, first build `developer_review_fixture` with
 `cargo build -p assemblywright-master --example developer_review_fixture`, then
 pass the runner's native `.exe` path through `--binary` and set
 `ASSEMBLYWRIGHT_DEVELOPER_REVIEW_FIXTURE` to the reviewer fixture's `.exe` path.

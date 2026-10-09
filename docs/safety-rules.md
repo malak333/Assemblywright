@@ -18,9 +18,11 @@ Creation binds the confirmed account/name/visibility and immutable repository ID
 device challenges never authorize model actions. Cancellation or unknown credential
 and creation effects require truthful observation and operation-bound recovery.
 Repository creation does not publish project files or bypass publication checks.
-Selecting a discovered repository also grants no local filesystem effect. The owner
-must separately request creation of one simple, direct workspace directory against
-the exact runner revision while Developer and GitHub work are idle. Existing direct
+Using a discovered repository or completing its exact creation requests one simple,
+direct workspace directory against the fresh runner revision while Developer and
+GitHub work are idle. The handoff cannot infer success from an unrelated cached
+creation or save a publication connection. Failed handoffs expose a local retry
+without repeating repository creation. Existing direct
 directories are observed idempotently without overwrite; files, links, reparse
 points, nested names, and paths outside the configured workspace fail closed. The
 action does not clone, import, upload, connect, plan, enqueue, or start work. Stop,
@@ -106,6 +108,13 @@ candidate and independent-review authority. Its protected-input state must be
 computed from the baseline plus authorized applied paths; ordinary repairs retain
 their narrower restrictions. Changing the validation command remains prohibited.
 See [`developer-scalable-repair-design.md`](developer-scalable-repair-design.md).
+Successful, exactly bound, cleaned stages with no raw mutations and zero ledger
+counts may consume an attempt as effect-free `no_op` and reserve a fresh automatic
+attempt under current policy. Failed or uncertain executions, malformed ancestry,
+nonempty mutations filtered to no edits, cleanup or compaction failure, tool
+attention, drift, and cancellation remain held.
+No-op successor admission must verify the unchanged candidate and complete unused
+application/review receipts; it cannot ignore a real review or application effect.
 If a fully applied automatic staged proposal is terminally quarantined and later
 attributable project-chat changes replace some of its bytes, recovery may admit a
 fresh exact-current candidate without replaying either write set. Eligibility

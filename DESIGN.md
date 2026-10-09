@@ -16,11 +16,13 @@ The owner requested Developer GitHub sign-in, repository discovery, and explicit
 repository creation after a saved Windows login became invalid. The accepted
 [`Developer GitHub setup`](docs/developer-github-setup-design.md) extends the earlier
 publication design with a device-authorization flow, repository picker, and
-account/name/visibility-bound creation. A selected repository may also supply the
-suggested name for one explicit empty local Windows workspace directory. That
+account/name/visibility-bound creation. Using a repository or completing an exact
+new-repository creation registers its empty local Windows project, making it
+available to the feature and chat pickers. That
 create-only action is revision-bound, serialized with GitHub and Developer work,
 and rejects files, links, reparse points, nested names, and paths outside the
-workspace. It performs no clone, import, upload, connection save, or feature start.
+workspace. Saving a publication connection remains separate; the project handoff
+performs no clone, import, upload, connection save, or feature start.
 Setup does not relax feature review, protected-check, or merge requirements.
 
 The owner approved automatic GitHub publication for connected Developer projects:
@@ -112,6 +114,15 @@ new current digest, preserves every counter and receipt, and authorizes only the
 original immutable validation plus a fresh independent review. Any rejection may
 enter a separately authorized future repair cycle under the current Auto AI policy;
 it cannot revive the interrupted proposal.
+
+A completed staged preparation with exact retained provenance, successful cleanup,
+no raw mutations, and zero mutation/text/asset counts is a known effect-free
+`no_op`. It consumes its capped attempt and may reserve a fresh automatic attempt
+under current policy. Failed or uncertain execution, malformed provenance, compaction failure, and
+tool attention keep
+their existing held recovery paths. No-op successor admission verifies the exact
+candidate ancestry and unused effect/review slots; it cannot reuse an actual
+review receipt or replay application effects.
 
 This document is the system-level design. Two documents own the detailed
 accepted designs and take precedence within their scope:

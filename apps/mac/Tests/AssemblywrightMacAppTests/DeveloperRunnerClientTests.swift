@@ -37,17 +37,22 @@ final class DeveloperRunnerClientTests {
 
   private func snapshot(_ revision: Int, mode: String = "supervised_developer",
     autoRepairEnabled: Bool = false, maxEscalations: Int = 100,
-    policyRevision: Int? = nil, queue: String = "[]") -> Data {
+    policyRevision: Int? = nil, queue: String = "[]", githubSetupBusy: Bool = false,
+    emergencyPaused: Bool = false, localProjects: String = "[\"fixture\"]") -> Data {
     let policyRevision = policyRevision ?? revision
     return Data("""
       {"mode":"\(mode)","host":"fixture-windows","workspace_root":"fixture",
-       "revision":\(revision),"auto_run":true,"emergency_paused":false,
+       "revision":\(revision),"auto_run":true,"emergency_paused":\(emergencyPaused),
        "running":false,"auto_ai_repair_enabled":\(autoRepairEnabled),
        "auto_ai_repair_max_escalations":\(maxEscalations),
        "auto_ai_repair_policy_revision":\(policyRevision),"queue":\(queue),
        "review_required":true,"review_provider":"openai.codex",
        "review_model":"gpt-5.6-sol","planning_required":true,"planning_provider":"openai.codex",
-       "planning_model":"gpt-5.6-sol","planning_running":false,"planning_sessions":[]}
+       "planning_model":"gpt-5.6-sol","planning_running":false,"planning_sessions":[],
+       "github_publication_supported":true,"github_publication_running":false,
+       "github_publication_unresolved":false,"github_setup_busy":\(githubSetupBusy),
+       "github_setup_unresolved":false,"can_manage_github_connections":true,
+       "github_connections":[],"local_projects":\(localProjects)}
       """.utf8)
   }
 
@@ -126,6 +131,98 @@ final class DeveloperRunnerClientTests {
     #expect(client.snapshot?.host == "fixture-windows")
     #expect(client.snapshot?.revision == 7)
     #expect(client.error == nil)
+  }
+
+  @Test func localProjectRefreshFailsClosedBeforeMutationWhenSetupBecameBusy() async throws {
+    let initial = snapshot(9)
+    let busy = snapshot(10, githubSetupBusy: true)
+    DeveloperHTTPFixture.respond { request in
+      #expect(request.httpMethod == "GET")
+      #expect(request.url?.path == "/status")
+      return (200, busy)
+    }
+    let client = try model()
+    let decoder = JSONDecoder()
+    decoder.keyDecodingStrategy = .convertFromSnakeCase
+    client.snapshot = try decoder.decode(DeveloperRunnerSnapshot.self, from: initial)
+    await #expect(throws: (any Error).self) {
+      try await client.createLocalProject("new-project", expectedRevision: 9)
+    }
+    #expect(client.snapshot?.revision == 9)
+    #expect(client.error?.contains("changed") == true)
+  }
+
+  @Test func delayedLocalProjectAcknowledgementCannotOverwriteNewerPausedState() async throws {
+    let initial = snapshot(9)
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let started = root.appendingPathComponent("publication-started")
+    let script = #"""
+import http.server,json,sys,time
+status_requests=0
+def snapshot(revision,paused,projects):
+ return {'mode':'supervised_developer','host':'fixture-windows','workspace_root':'fixture',
+  'revision':revision,'auto_run':True,'emergency_paused':paused,'running':False,
+  'chat_running':False,'queue':[],'review_required':True,'review_provider':'openai.codex',
+  'review_model':'gpt-5.6-sol','planning_required':True,'planning_provider':'openai.codex',
+  'planning_model':'gpt-5.6-sol','planning_running':False,'planning_sessions':[],
+  'github_publication_supported':True,'github_publication_running':False,
+  'github_publication_unresolved':False,'github_setup_busy':False,
+  'github_setup_unresolved':False,'can_manage_github_connections':True,
+  'github_connections':[],'local_projects':projects}
+class Handler(http.server.BaseHTTPRequestHandler):
+ def reply(self,value):
+  data=json.dumps(value).encode();self.send_response(200);self.send_header('Content-Length',str(len(data)));self.end_headers();self.wfile.write(data)
+ def do_GET(self):
+  global status_requests
+  status_requests+=1
+  self.reply(snapshot(10,False,['fixture']) if status_requests==1 else snapshot(12,True,['fixture','new-project']))
+ def do_POST(self):
+  body=json.loads(self.rfile.read(int(self.headers['Content-Length'])))
+  open(sys.argv[1],'w').close()
+  time.sleep(0.35)
+  self.reply(snapshot(11,False,['fixture','new-project']))
+ def log_message(self,*args):pass
+server=http.server.ThreadingHTTPServer(('127.0.0.1',0),Handler)
+sys.stdout.buffer.write(server.server_port.to_bytes(4,'big'));sys.stdout.buffer.flush();server.serve_forever()
+"""#
+    let server = Process(), output = Pipe()
+    server.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+    server.arguments = ["python3", "-u", "-c", script, started.path]
+    server.standardInput = FileHandle.nullDevice
+    server.standardOutput = output
+    server.standardError = FileHandle.nullDevice
+    try server.run()
+    defer {
+      if server.isRunning { server.terminate(); server.waitUntilExit() }
+      try? output.fileHandleForReading.close()
+    }
+    let handshake = try #require(try output.fileHandleForReading.read(upToCount: 4))
+    let port = handshake.reduce(0) { ($0 << 8) | Int($1) }
+    let config = root.appendingPathComponent("runtime.json")
+    try JSONSerialization.data(withJSONObject: [
+      "endpoint": "http://127.0.0.1:\(port)", "token": "fixture-token",
+    ]).write(to: config)
+    let client = DeveloperRunnerModel(configurationPath: config.path)
+    let decoder = JSONDecoder()
+    decoder.keyDecodingStrategy = .convertFromSnakeCase
+    client.snapshot = try decoder.decode(DeveloperRunnerSnapshot.self, from: initial)
+
+    let creation = Task {
+      try await client.createLocalProject("new-project", expectedRevision: 9)
+    }
+    for _ in 0..<100 {
+      if FileManager.default.fileExists(atPath: started.path) { break }
+      try await Task.sleep(for: .milliseconds(10))
+    }
+    #expect(FileManager.default.fileExists(atPath: started.path))
+    await client.refresh()
+    _ = try await creation.value
+
+    #expect(client.snapshot?.revision == 12)
+    #expect(client.snapshot?.emergencyPaused == true)
+    #expect(client.snapshot?.localProjects?.contains("new-project") == true)
   }
 
   @Test func staleStatusCannotReplaceNewerCommandResult() async throws {

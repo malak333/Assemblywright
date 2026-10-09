@@ -93,12 +93,19 @@ enum DeveloperGitHubRequest {
 }
 
 enum DeveloperGitHubAcknowledgement {
+  static func createdLocalProjectName(_ snapshot: DeveloperRunnerSnapshot,
+    expectedRevision: UInt64, project: String) -> String? {
+    guard snapshot.revision == expectedRevision
+        || expectedRevision < UInt64.max && snapshot.revision == expectedRevision + 1 else {
+      return nil
+    }
+    return DeveloperGitHubPresentation.canonicalLocalProjectName(project,
+      projects: snapshot.localProjects)
+  }
+
   static func createdLocalProject(_ snapshot: DeveloperRunnerSnapshot,
     expectedRevision: UInt64, project: String) -> Bool {
-    guard snapshot.revision == expectedRevision
-        || expectedRevision < UInt64.max && snapshot.revision == expectedRevision + 1,
-      snapshot.localProjects?.contains(project) == true else { return false }
-    return true
+    createdLocalProjectName(snapshot, expectedRevision: expectedRevision, project: project) != nil
   }
 
   static func saved(_ snapshot: DeveloperRunnerSnapshot, expectedRevision: UInt64,
@@ -166,6 +173,13 @@ enum DeveloperGitHubPresentation {
     }
     while suggestion.last == "-" { suggestion.removeLast() }
     return validLocalProjectName(suggestion) ? suggestion : nil
+  }
+
+  static func canonicalLocalProjectName(_ requested: String, projects: [String]?) -> String? {
+    guard validProject(requested), let projects else { return nil }
+    if projects.contains(requested) { return requested }
+    let matches = projects.filter { $0.caseInsensitiveCompare(requested) == .orderedSame }
+    return matches.count == 1 ? matches[0] : nil
   }
 
   static func validProject(_ value: String) -> Bool {
@@ -319,6 +333,7 @@ struct DeveloperGitHubFeatureStatus: View {
 struct DeveloperGitHubView: View {
   @ObservedObject var runner: DeveloperRunnerModel
   let projects: [String]
+  let onProjectReady: (String) -> Void
   @StateObject private var setup: DeveloperGitHubSetupModel
   @Environment(\.dismiss) private var dismiss
   @State private var selectedProject = ""
@@ -332,9 +347,11 @@ struct DeveloperGitHubView: View {
   @State private var preserveRepositoryDraftForProject: String?
   @State private var repositorySelectionSequence = 0
 
-  init(runner: DeveloperRunnerModel, projects: [String], configurationPath: String) {
+  init(runner: DeveloperRunnerModel, projects: [String], configurationPath: String,
+    onProjectReady: @escaping (String) -> Void = { _ in }) {
     self.runner = runner
     self.projects = projects
+    self.onProjectReady = onProjectReady
     _setup = StateObject(wrappedValue: DeveloperGitHubSetupModel(configurationPath: configurationPath))
   }
 
@@ -352,7 +369,8 @@ struct DeveloperGitHubView: View {
       && !runner.sending
   }
   private var inputIsValid: Bool {
-    DeveloperGitHubPresentation.validProject(project)
+    DeveloperGitHubPresentation.canonicalLocalProjectName(project,
+      projects: runner.snapshot?.localProjects) == project
       && DeveloperGitHubURL.repository(repositoryURL) != nil
       && DeveloperGitHubPresentation.validBaseBranch(baseBranch)
   }
@@ -377,31 +395,7 @@ struct DeveloperGitHubView: View {
         Label("A publication needs reconciliation before connections or new work can change.",
           systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange)
       }
-      if allProjects.isEmpty {
-        Text("No local projects are available. Select a repository, then create its empty local project below.")
-          .font(.caption).foregroundStyle(.secondary)
-      } else {
-        Picker("Project", selection: $selectedProject) {
-          ForEach(allProjects, id: \.self) { Text($0).tag($0) }
-        }.accessibilityIdentifier("developer-github-project")
-      }
-      GroupBox("Local project") {
-        VStack(alignment: .leading, spacing: 8) {
-          Text("Create one empty folder under the Windows Developer workspace. This does not clone, download, upload, or connect the repository.")
-            .font(.caption).foregroundStyle(.secondary)
-          TextField("Local project name", text: $localProjectName)
-            .accessibilityIdentifier("developer-github-local-project-name")
-          Button("Create empty local project") { createLocalProject() }
-            .disabled(!canCreateLocalProject)
-            .accessibilityIdentifier("developer-github-local-project-create")
-        }.frame(maxWidth: .infinity, alignment: .leading).padding(6)
-      }
-      .id("developer-github-local-project-form")
-      if runner.snapshot?.localProjects == nil {
-        Label("Update the Windows developer runner to create local projects from this dialog.",
-          systemImage: "exclamationmark.triangle.fill")
-          .font(.caption).foregroundStyle(.orange)
-      }
+      localProjectSection
       if connection == nil {
         Text("Not connected · successful features stay local and unpublished")
           .font(.caption).foregroundStyle(.secondary)
@@ -464,6 +458,11 @@ struct DeveloperGitHubView: View {
     .onChange(of: repositorySelectionSequence) { _, _ in
       withAnimation { proxy.scrollTo("developer-github-local-project-form", anchor: .top) }
     }
+    .onChange(of: setup.completedProjectHandoff) { _, handoff in
+      guard let handoff else { return }
+      useRepository(repositoryURL: handoff.repositoryURL, baseBranch: handoff.baseBranch,
+        projectName: handoff.project, handoffOperationID: handoff.operationId)
+    }
     .confirmationDialog("Create this GitHub repository?", isPresented: $confirmingCreation,
       titleVisibility: .visible) {
       Button("Create \(repositoryVisibility) repository") {
@@ -473,7 +472,7 @@ struct DeveloperGitHubView: View {
       .disabled(!canCreateRepository)
       Button("Cancel", role: .cancel) {}
     } message: {
-      Text("Account: \(setup.snapshot?.account.login ?? "Unavailable")\nRepository: \(repositoryName)\nVisibility: \(repositoryVisibility.capitalized)\n\nThis initializes a README and does not upload project files or connect this project.")
+      Text("Account: \(setup.snapshot?.account.login ?? "Unavailable")\nRepository: \(repositoryName)\nVisibility: \(repositoryVisibility.capitalized)\n\nThis initializes a README and creates or selects the matching empty local project after GitHub confirms this exact operation. It does not clone, upload project files, or save the GitHub connection.")
     }
     }
   }
@@ -521,6 +520,41 @@ struct DeveloperGitHubView: View {
     }
   }
 
+  @ViewBuilder private var localProjectSection: some View {
+    if allProjects.isEmpty {
+      Text("No local projects are available. Select a repository to create its empty local project.")
+        .font(.caption).foregroundStyle(.secondary)
+    } else {
+      Picker("Project", selection: $selectedProject) {
+        ForEach(allProjects, id: \.self) { Text($0).tag($0) }
+        if !selectedProject.isEmpty && !allProjects.contains(selectedProject) {
+          Text("\(selectedProject) · local project pending").tag(selectedProject)
+        }
+      }.accessibilityIdentifier("developer-github-project")
+    }
+    GroupBox("Local project") {
+      VStack(alignment: .leading, spacing: 8) {
+        Text("Create one empty folder under the Windows Developer workspace. This does not clone, download, upload, or connect the repository.")
+          .font(.caption).foregroundStyle(.secondary)
+        TextField("Local project name", text: $localProjectName)
+          .accessibilityIdentifier("developer-github-local-project-name")
+        Button("Create empty local project") { createLocalProject() }
+          .disabled(!canCreateLocalProject)
+          .accessibilityIdentifier("developer-github-local-project-create")
+        if !selectedProject.isEmpty && !allProjects.contains(selectedProject) {
+          Text("The local project is not confirmed yet. The repository draft is preserved; retry creates or observes only this empty local directory.")
+            .font(.caption).foregroundStyle(localError == nil ? Color.secondary : Color.orange)
+        }
+      }.frame(maxWidth: .infinity, alignment: .leading).padding(6)
+    }
+    .id("developer-github-local-project-form")
+    if runner.snapshot?.localProjects == nil {
+      Label("Update the Windows developer runner to create local projects from this dialog.",
+        systemImage: "exclamationmark.triangle.fill")
+        .font(.caption).foregroundStyle(.orange)
+    }
+  }
+
   @ViewBuilder private var repositoriesSection: some View {
     GroupBox("Your repositories") {
       VStack(alignment: .leading, spacing: 8) {
@@ -557,13 +591,9 @@ struct DeveloperGitHubView: View {
               }
             }
             Spacer()
-            Button("Select") {
-              repositoryURL = repository.url
-              baseBranch = repository.defaultBranch
-              localProjectName = DeveloperGitHubPresentation.suggestedLocalProjectName(
-                repositoryURL: repository.url) ?? ""
-              repositorySelectionSequence &+= 1
-            }.disabled(!repository.canSelect)
+            Button("Use project") {
+              useRepository(repositoryURL: repository.url, baseBranch: repository.defaultBranch)
+            }.disabled(!repository.canSelect || !canEdit || runner.snapshot?.localProjects == nil)
           }
           .accessibilityIdentifier("developer-github-repository-\(repository.id)")
           Divider()
@@ -575,7 +605,7 @@ struct DeveloperGitHubView: View {
   @ViewBuilder private var creationSection: some View {
     GroupBox("Create a repository") {
       VStack(alignment: .leading, spacing: 8) {
-        Text("Creates a new repository initialized with a README. Save the project connection afterward.")
+        Text("Creates a new repository initialized with a README, then creates or selects its matching empty local project. Save the project connection afterward.")
           .font(.caption).foregroundStyle(.secondary)
         TextField("Repository name", text: $repositoryName)
           .accessibilityIdentifier("developer-github-create-name")
@@ -592,8 +622,42 @@ struct DeveloperGitHubView: View {
           if creation.state == "succeeded", let url = creation.repositoryUrl,
             let safeURL = DeveloperGitHubURL.repository(url) {
             Link("Open created repository", destination: safeURL)
-            Text("Repository created. Select it above or enter its URL, then save the connection. Publication readiness is checked separately.")
-              .font(.caption).foregroundStyle(.green)
+            let createdProjectName = DeveloperGitHubPresentation.suggestedLocalProjectName(
+              repositoryURL: url)
+            let readyProjectName = createdProjectName.flatMap {
+              DeveloperGitHubPresentation.canonicalLocalProjectName($0,
+                projects: runner.snapshot?.localProjects)
+            }
+            if let readyProjectName {
+              Text(selectedProject == readyProjectName
+                ? "Local project \(readyProjectName) is ready and selected. Save the GitHub connection when you are ready to publish future successful features."
+                : "Local project \(readyProjectName) is ready. Use it below to select this project and preserve the repository draft.")
+                .font(.caption).foregroundStyle(.green)
+              if selectedProject != readyProjectName, let branch = creation.defaultBranch,
+                DeveloperGitHubPresentation.validBaseBranch(branch) {
+                Button("Use created project") {
+                  selectConfirmedProject(readyProjectName, repositoryURL: url,
+                    baseBranch: branch)
+                }
+                .accessibilityIdentifier("developer-github-use-created-project")
+              }
+            } else if setup.completedProjectHandoff?.operationId == creation.operationId {
+              Text("Repository created. Assemblywright is creating or selecting its matching local project.")
+                .font(.caption).foregroundStyle(.green)
+            } else {
+              Text("Repository ready. Use the explicit action below to create or select its matching local project; this cached result will not run automatically.")
+                .font(.caption).foregroundStyle(.secondary)
+              if let branch = creation.defaultBranch,
+                DeveloperGitHubPresentation.validBaseBranch(branch),
+                let projectName = createdProjectName {
+                Button("Use created project") {
+                  useRepository(repositoryURL: url, baseBranch: branch,
+                    projectName: projectName)
+                }
+                .disabled(!canEdit || runner.snapshot?.localProjects == nil)
+                .accessibilityIdentifier("developer-github-use-created-project")
+              }
+            }
           } else if creation.state == "existing" {
             Text("An existing repository was found. Load repositories and select it explicitly if it is the intended destination.")
               .font(.caption).foregroundStyle(.orange)
@@ -616,6 +680,7 @@ struct DeveloperGitHubView: View {
       && DeveloperGitHubSetupValidation.validRepositoryName(repositoryName)
       && ["private", "public"].contains(repositoryVisibility)
       && setup.snapshot?.creation?.state != "attention"
+      && !setup.hasPendingProjectHandoff
   }
 
   private var canCreateLocalProject: Bool {
@@ -660,23 +725,51 @@ struct DeveloperGitHubView: View {
   }
 
   private func createLocalProject() {
+    useRepository(repositoryURL: repositoryURL, baseBranch: baseBranch,
+      projectName: localProjectName)
+  }
+
+  private func useRepository(repositoryURL: String, baseBranch: String,
+    projectName: String? = nil, handoffOperationID: String? = nil) {
     guard let revision = runner.snapshot?.revision,
-      DeveloperGitHubPresentation.validLocalProjectName(localProjectName) else { return }
-    let name = localProjectName
-    let previousProject = selectedProject
+      let name = projectName ?? DeveloperGitHubPresentation.suggestedLocalProjectName(
+        repositoryURL: repositoryURL),
+      DeveloperGitHubURL.repository(repositoryURL) != nil,
+      DeveloperGitHubPresentation.validBaseBranch(baseBranch),
+      DeveloperGitHubPresentation.validLocalProjectName(name) else { return }
+    self.repositoryURL = repositoryURL
+    self.baseBranch = baseBranch
+    localProjectName = name
     preserveRepositoryDraftForProject = name
     selectedProject = name
+    repositorySelectionSequence &+= 1
     localError = nil
     Task {
       do {
-        try await runner.createLocalProject(name, expectedRevision: revision)
+        let confirmedName = try await runner.createLocalProject(name, expectedRevision: revision)
+        localProjectName = confirmedName
+        preserveRepositoryDraftForProject = confirmedName
+        selectedProject = confirmedName
+        onProjectReady(confirmedName)
+        if let handoffOperationID {
+          setup.consumeCompletedProjectHandoff(handoffOperationID)
+        }
       } catch {
-        preserveRepositoryDraftForProject = nil
-        selectedProject = previousProject
-        loadConnection()
         localError = error.localizedDescription
       }
     }
+  }
+
+  private func selectConfirmedProject(_ project: String, repositoryURL: String,
+    baseBranch: String) {
+    guard DeveloperGitHubPresentation.canonicalLocalProjectName(project,
+      projects: runner.snapshot?.localProjects) == project else { return }
+    self.repositoryURL = repositoryURL
+    self.baseBranch = baseBranch
+    localProjectName = project
+    preserveRepositoryDraftForProject = project
+    selectedProject = project
+    onProjectReady(project)
   }
 
   private func disconnect() {

@@ -702,35 +702,68 @@ final class DeveloperRunnerModel: ObservableObject {
       }
   }
 
-  func createLocalProject(_ project: String, expectedRevision: UInt64) async throws {
+  func createLocalProject(_ project: String, expectedRevision: UInt64) async throws -> String {
     guard !sending, let current = snapshot, current.revision == expectedRevision,
       current.githubPublicationSupported == true,
-      current.canManageGithubConnections == true, current.githubPublicationUnresolved != true,
-      current.githubSetupBusy != true, current.githubSetupUnresolved != true,
+      current.canManageGithubConnections == true,
       DeveloperGitHubPresentation.validLocalProjectName(project) else {
       throw githubStateChangedError()
     }
     sending = true
     defer { sending = false }
     do {
+      let refreshed = try await request(path: "status")
+      guard refreshed.revision >= expectedRevision,
+        refreshed.revision >= (snapshot?.revision ?? expectedRevision),
+        canCreateLocalProject(refreshed, project: project) else {
+        throw githubStateChangedError()
+      }
+      snapshot = refreshed
       let updated = try await request(path: "publication",
         body: DeveloperGitHubRequest.createProject(project: project,
-          expectedRevision: expectedRevision))
-      guard DeveloperGitHubAcknowledgement.createdLocalProject(updated,
-        expectedRevision: expectedRevision, project: project),
-        updated.revision >= (snapshot?.revision ?? expectedRevision) else {
+          expectedRevision: refreshed.revision))
+      guard let acknowledgedName = DeveloperGitHubAcknowledgement.createdLocalProjectName(updated,
+        expectedRevision: refreshed.revision, project: project), updated.revision >= refreshed.revision else {
         throw NSError(domain: "Developer GitHub", code: 3,
           userInfo: [NSLocalizedDescriptionKey:
             "Windows did not confirm the exact local project directory. Reload before continuing."])
       }
-      snapshot = updated
+      if let latest = snapshot, latest.revision > updated.revision {
+        guard let latestName = DeveloperGitHubPresentation.canonicalLocalProjectName(project,
+          projects: latest.localProjects) else {
+          throw NSError(domain: "Developer GitHub", code: 4,
+            userInfo: [NSLocalizedDescriptionKey:
+              "Newer Windows state does not confirm the local project. Reload before continuing."])
+        }
+        actionError = nil
+        error = nil
+        return latestName
+      } else {
+        guard updated.revision >= (snapshot?.revision ?? refreshed.revision) else {
+          throw NSError(domain: "Developer GitHub", code: 5,
+            userInfo: [NSLocalizedDescriptionKey:
+              "Newer Windows state superseded the local project response. Reload before continuing."])
+        }
+        snapshot = updated
+      }
       actionError = nil
       error = nil
+      return acknowledgedName
     } catch {
       actionError = error.localizedDescription
       self.error = actionError
       throw error
     }
+  }
+
+  private func canCreateLocalProject(_ state: DeveloperRunnerSnapshot, project: String) -> Bool {
+    state.githubPublicationSupported == true
+      && state.canManageGithubConnections == true && state.githubPublicationUnresolved != true
+      && state.githubSetupBusy != true && state.githubSetupUnresolved != true
+      && !state.emergencyPaused && !state.running && !state.planningRunning
+      && state.chatRunning != true && state.escalationRunning != true
+      && state.githubPublicationRunning != true
+      && DeveloperGitHubPresentation.validLocalProjectName(project)
   }
 
   func disconnectGitHub(project: String, expectedRevision: UInt64) async throws {
@@ -1218,7 +1251,9 @@ struct DeveloperRunnerView: View {
       .sheet(isPresented: $showingGitHub) {
         DeveloperGitHubView(runner: model,
           projects: availableProjects,
-          configurationPath: configurationPath)
+          configurationPath: configurationPath) { project in
+            chatProject = project
+          }
       }
       .sheet(isPresented: $showingEscalation) {
         if let escalationFeatureId {
