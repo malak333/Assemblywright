@@ -3597,3 +3597,20 @@ consistency.
   continuation only under the current enabled policy, running lifecycle, and
   uncancelled epoch. Every next staged attempt reserves new evidence and still
   validates and reviews fresh bytes. See [handoff and continuation evidence](../developer-project-handoff-validation.md).
+
+### Completed empty staged preparation
+
+- A completed stage with exact execution/candidate bindings, unchanged protected
+  and live fingerprints, successful cleanup, no raw mutations, and zero ledger
+  counts is a known `no_op`. It consumes an attempt and can continue under the
+  existing current-policy retry cap. It cannot be treated as an unknown provider
+  failure merely because no edits were generated.
+- Failed or uncertain execution, malformed provenance, nonempty mutations that
+  collapse to no edits, cleanup or compaction failure, tool attention, cancellation, and drift retain their
+  held recovery paths. A no-op successor must prove its effect-free application
+  receipt and exact candidate ancestry before reserving fresh evidence.
+- Real demo6 reached `succeeded` / `review_7_approved`, with 34 original Windows
+  tests, six staged attempts, seven reviews, and no parent edits to generated
+  files. One inspected public Resume was needed for its empty fifth attempt
+  before this correction. Keep that limitation distinct from the new native
+  no-Resume regression and from GitHub source publication.

@@ -67,8 +67,12 @@ def main():
         help="prove source-review feedback survives a rejected protected candidate and routes directly to staged repair")
     parser.add_argument("--protected-staged-retry-only", action="store_true",
         help="prove a protected rejection after staged repair autonomously starts a second staged attempt")
+    parser.add_argument("--empty-staged-retry-only", action="store_true",
+        help="prove a completed clean empty stage consumes one attempt and autonomously starts a fresh staged attempt")
     args = parser.parse_args()
-    if args.candidate_rejection_route_only and args.protected_staged_retry_only:
+    selected_modes = sum([args.candidate_rejection_route_only,
+        args.protected_staged_retry_only, args.empty_staged_retry_only])
+    if selected_modes > 1:
         parser.error("select only one staged repair proof mode")
     binary = str(Path(args.binary).resolve())
     opencode = args.opencode_executable or provision_pinned_runtime(
@@ -110,11 +114,13 @@ def main():
                 raise AssertionError("lineage fixture expected the real project-tool lane")
             tool_results = [message for message in request.get("messages", [])
                 if message.get("role") == "tool"]
+            staged_prompt = "Staged build environment:" in prompt
             if tool_results:
                 return model_reply(self, request,
                     {"content": "Completed the bounded project change."}, "stop")
             candidate_route = "candidate-rejection-route" in prompt
             protected_staged_retry = "protected-staged-retry" in prompt
+            empty_staged_retry = "empty-staged-retry" in prompt
             if candidate_route and "repair attempt 1 of 3" in prompt.lower():
                 phase = "ordinary_protected_candidate"
                 code = ("from pathlib import Path; "
@@ -148,6 +154,24 @@ def main():
                         "Path('stage.txt').write_text('protected staged repair 2\\n')")
             elif protected_staged_retry:
                 phase = "protected_retry_initial"
+                code = ("from pathlib import Path; Path('tests').mkdir(exist_ok=True); "
+                    "Path('app.py').write_text('WRONG = 0\\n'); "
+                    "Path('tests/test_site.py').write_text('# VALUE = 0\\nassert True\\n')")
+            elif empty_staged_retry and staged_prompt:
+                staged_attempt = 1 + sum(
+                    phase.startswith("empty_staged_") for phase in phases)
+                phase = f"empty_staged_{staged_attempt}"
+                if staged_attempt == 1:
+                    code = ("from pathlib import Path; "
+                        "assert Path('tests/test_site.py').read_text(); "
+                        "assert Path('app.py').read_text()")
+                else:
+                    code = ("from pathlib import Path; "
+                        "Path('app.py').write_text('VALUE = 1\\n'); "
+                        "Path('tests/test_site.py').write_text('assert True\\n'); "
+                        "Path('stage.txt').write_text('fresh staged repair after empty\\n')")
+            elif empty_staged_retry:
+                phase = "empty_retry_initial"
                 code = ("from pathlib import Path; Path('tests').mkdir(exist_ok=True); "
                     "Path('app.py').write_text('WRONG = 0\\n'); "
                     "Path('tests/test_site.py').write_text('# VALUE = 0\\nassert True\\n')")
@@ -269,7 +293,8 @@ def main():
             feature_id = str(uuid.uuid4())
             project_name = ("candidate-rejection-route"
                 if args.candidate_rejection_route_only else
-                "protected-staged-retry" if args.protected_staged_retry_only else "lineage")
+                "protected-staged-retry" if args.protected_staged_retry_only else
+                "empty-staged-retry" if args.empty_staged_retry_only else "lineage")
             instruction = ((
                 "Build the candidate-rejection-route fixture "
                 "[fixture:source-regression]. The source correction must preserve the "
@@ -278,6 +303,9 @@ def main():
                 "Build the protected-staged-retry fixture [fixture:reject-zero]. "
                 "Every protected blocker requires a fresh staged repair."
             ) if args.protected_staged_retry_only else (
+                "Build the empty-staged-retry fixture [fixture:reject-zero]. "
+                "A clean completed empty attempt must consume its bound and continue."
+            ) if args.empty_staged_retry_only else (
                 "Build the lineage fixture [fixture:reject-zero]. "
                 "The first protected blocker requires staged repair; any later source "
                 "blocker must use ordinary repair."
@@ -295,11 +323,15 @@ def main():
                 next(item for item in state["queue"] if item["id"] == feature_id)["status"]
                 == "succeeded")
             public = next(item for item in completed["queue"] if item["id"] == feature_id)
-            expected_repairs = 0 if args.protected_staged_retry_only else 1
-            expected_escalations = 2 if args.protected_staged_retry_only else 1
+            expected_repairs = 0 if (args.protected_staged_retry_only or
+                args.empty_staged_retry_only) else 1
+            expected_escalations = 2 if (args.protected_staged_retry_only or
+                args.empty_staged_retry_only) else 1
             assert public["repair_attempts"] == expected_repairs, public
             assert public["escalation_count"] == expected_escalations, public
-            expected_review_attempts = 2 if args.candidate_rejection_route_only else 3
+            expected_review_attempts = 2 if (
+                args.candidate_rejection_route_only or args.empty_staged_retry_only
+            ) else 3
             assert public["review_attempts"] == expected_review_attempts, public
             if args.candidate_rejection_route_only:
                 assert phases == ["candidate_route_initial", "ordinary_protected_candidate",
@@ -307,6 +339,9 @@ def main():
             elif args.protected_staged_retry_only:
                 assert phases == ["protected_retry_initial", "protected_staged_1",
                     "protected_staged_2"], phases
+            elif args.empty_staged_retry_only:
+                assert phases == ["empty_retry_initial", "empty_staged_1",
+                    "empty_staged_2"], phases
             else:
                 assert phases == [
                     "initial", "staged_automatic", "ordinary_successor"], phases
@@ -324,7 +359,8 @@ def main():
             feature = next(item for item in queue if item["id"] == feature_id)
             proposal = feature["escalation_proposal"]
             expected_proposal_status = ("succeeded"
-                if args.candidate_rejection_route_only or args.protected_staged_retry_only
+                if args.candidate_rejection_route_only or args.protected_staged_retry_only or
+                args.empty_staged_retry_only
                 else "failed")
             assert proposal["status"] == expected_proposal_status and proposal["staged_binding"]
             assert proposal["application_state_sha256"]
@@ -332,7 +368,7 @@ def main():
                 if item["proposal_id"] == proposal["proposal_id"]]
             assert [item["outcome"] for item in receipts] == [
                 "ready", "policy_authorized", expected_proposal_status], receipts
-            if not args.protected_staged_retry_only:
+            if not args.protected_staged_retry_only and not args.empty_staged_retry_only:
                 repair = feature["repair_history"][0]
                 expected_prior_review = ("review_1_rejected"
                     if args.candidate_rejection_route_only else "review_2_rejected")
@@ -362,6 +398,28 @@ def main():
                 assert list(proposal_receipts.values()) == [
                     ["ready", "policy_authorized", "failed"],
                     ["ready", "policy_authorized", "succeeded"]], proposal_receipts
+            elif args.empty_staged_retry_only:
+                assert feature["repair_history"] == []
+                assert proposal["feature_checkpoint"] == "escalation_1_no_op"
+                assert [item["outcome"] for item in feature["review_history"]] == [
+                    "rejected", "not_run", "approved"]
+                proposal_receipts = {}
+                for receipt in feature["escalation_history"]:
+                    proposal_receipts.setdefault(receipt["proposal_id"], []).append(
+                        receipt["outcome"])
+                assert list(proposal_receipts.values()) == [
+                    ["no_op", "authorization_not_run", "application_not_run"],
+                    ["ready", "policy_authorized", "succeeded"]], proposal_receipts
+                with closing(sqlite3.connect(data / "developer.sqlite3")) as database:
+                    stage_rows = database.execute(
+                        "SELECT status,mutation_count,text_bytes,asset_bytes,serialized_bytes "
+                        "FROM developer_tool_stage WHERE project=? ORDER BY rowid",
+                        (project_name,)).fetchall()
+                    payload_count = database.execute(
+                        "SELECT COUNT(*) FROM developer_tool_stage_mutation").fetchone()[0]
+                assert stage_rows[0] == ("compacted", 0, 0, 0, 0), stage_rows
+                assert stage_rows[1][0] == "compacted" and stage_rows[1][1] > 0, stage_rows
+                assert payload_count == 0
             else:
                 feedback = json.loads(repair["prior_message"])
                 assert feedback["feedback"]["blocking_findings"][0]["path"] == "app.py"
@@ -440,12 +498,16 @@ def main():
                 "staged_application_state_bound": True,
                 "source_only_review_routes_to_ordinary_successor":
                     not args.candidate_rejection_route_only and
-                    not args.protected_staged_retry_only,
+                    not args.protected_staged_retry_only and
+                    not args.empty_staged_retry_only,
                 "ordinary_successor_revalidated_and_freshly_reviewed":
                     not args.candidate_rejection_route_only and
-                    not args.protected_staged_retry_only,
+                    not args.protected_staged_retry_only and
+                    not args.empty_staged_retry_only,
                 "protected_staged_rejection_autonomously_retries_staged":
                     args.protected_staged_retry_only,
+                "completed_empty_stage_autonomously_retries_staged":
+                    args.empty_staged_retry_only,
                 "candidate_rejection_routes_before_ordinary_attempt_two":
                     args.candidate_rejection_route_only,
                 "candidate_rejection_preserves_exact_review_feedback":

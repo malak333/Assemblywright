@@ -108,6 +108,13 @@ candidate and independent-review authority. Its protected-input state must be
 computed from the baseline plus authorized applied paths; ordinary repairs retain
 their narrower restrictions. Changing the validation command remains prohibited.
 See [`developer-scalable-repair-design.md`](developer-scalable-repair-design.md).
+Successful, exactly bound, cleaned stages with no raw mutations and zero ledger
+counts may consume an attempt as effect-free `no_op` and reserve a fresh automatic
+attempt under current policy. Failed or uncertain executions, malformed ancestry,
+nonempty mutations filtered to no edits, cleanup or compaction failure, tool
+attention, drift, and cancellation remain held.
+No-op successor admission must verify the unchanged candidate and complete unused
+application/review receipts; it cannot ignore a real review or application effect.
 If a fully applied automatic staged proposal is terminally quarantined and later
 attributable project-chat changes replace some of its bytes, recovery may admit a
 fresh exact-current candidate without replaying either write set. Eligibility

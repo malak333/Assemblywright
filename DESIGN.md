@@ -115,6 +115,15 @@ original immutable validation plus a fresh independent review. Any rejection may
 enter a separately authorized future repair cycle under the current Auto AI policy;
 it cannot revive the interrupted proposal.
 
+A completed staged preparation with exact retained provenance, successful cleanup,
+no raw mutations, and zero mutation/text/asset counts is a known effect-free
+`no_op`. It consumes its capped attempt and may reserve a fresh automatic attempt
+under current policy. Failed or uncertain execution, malformed provenance, compaction failure, and
+tool attention keep
+their existing held recovery paths. No-op successor admission verifies the exact
+candidate ancestry and unused effect/review slots; it cannot reuse an actual
+review receipt or replay application effects.
+
 This document is the system-level design. Two documents own the detailed
 accepted designs and take precedence within their scope:
 

@@ -339,3 +339,10 @@ in the canonical Cargo Developer workflow E2E. This protects against losing
 automatic scheduler authorization after a terminal protected rejection of a
 fully applied staged candidate. It must complete a second staged attempt and
 fresh review without owner Resume. See [phase evidence](developer-project-handoff-validation.md).
+
+The same canonical harness runs `--empty-staged-retry-only` to distinguish a
+completed effect-free stage from failed or uncertain execution. A clean empty
+stage consumes its capped attempt as `no_op` and reserves a fresh attempt without
+Resume; provider failure and unverified provenance remain held. The retained real
+demo6 completion and its earlier one-Resume recovery are recorded separately in
+the phase evidence.

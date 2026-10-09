@@ -185,13 +185,14 @@ real HTTP, filesystem and SQLite boundaries with fixture model responses:
 python3 -B scripts/developer-runner-staged-repair-e2e.py --binary target/debug/assemblywright-developer
 python3 -B scripts/developer-runner-staged-repair-e2e.py --binary target/debug/assemblywright-developer --candidate-rejection-route-only
 python3 -B scripts/developer-runner-staged-repair-e2e.py --binary target/debug/assemblywright-developer --protected-staged-retry-only
+python3 -B scripts/developer-runner-staged-repair-e2e.py --binary target/debug/assemblywright-developer --empty-staged-retry-only
 cargo test -p assemblywright-master --bin assemblywright-developer terminal_staged -- --nocapture
 ```
 
 It forces protected review rejection, staged automatic application, a second
 source-only rejection, ordinary successor repair, fresh validation and a third
 approved review. It asserts the staged application-state binding and immutable
-receipt ancestry. The canonical `developer_workflow_e2e` test includes all three modes of this
+receipt ancestry. The canonical `developer_workflow_e2e` test includes all four modes of this
 harness. The candidate-rejection mode starts with a source-file review finding
 that requests a regression assertion, rejects an ordinary protected-test
 candidate without applying it, and routes directly to staged repair before a
@@ -199,7 +200,10 @@ second ordinary attempt. It retains nonempty cumulative edits, preserves exact
 review feedback, and separately proves that malformed predecessor linkage holds
 without another model call or write. The protected-staged-retry mode rejects the
 first staged candidate on protected findings, then requires a second staged
-application and fresh approval without Resume. On Windows, first build `developer_review_fixture` with
+application and fresh approval without Resume. The empty-staged-retry mode proves
+that a completed, bound, effect-free stage consumes its attempt as `no_op` and
+reserves a fresh attempt without Resume. Unknown or failed executions remain held.
+On Windows, first build `developer_review_fixture` with
 `cargo build -p assemblywright-master --example developer_review_fixture`, then
 pass the runner's native `.exe` path through `--binary` and set
 `ASSEMBLYWRIGHT_DEVELOPER_REVIEW_FIXTURE` to the reviewer fixture's `.exe` path.
