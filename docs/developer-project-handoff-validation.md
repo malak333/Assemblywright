@@ -169,13 +169,20 @@ stage mode passed with zero ordinary repairs, two staged attempts, two
 fixture-backed review decisions, and no Resume. Its effect-free `not_run` receipt
 remains audit history and does not count as a review call.
 
+The full gate caught a compatibility regression in the older non-staged JSON
+no-op retry. Staged verification now opts in only when a staged binding exists;
+the early protected route still cannot proceed without that binding. The full
+Developer binary unit suite passed all 440 tests after the correction, and the
+native empty-stage mode passed again on that exact source.
+
 The final correction was built and installed through the canonical production
 launcher. Windows executable SHA-256 is
-`eb08b501513690c9f5626e0ed897ba3405afd44b3cea53751ce0705a786483c9`;
+`1e1878451edb5a15713614c3d333073d5ec2dca3c4d97f3a67b6729c7c3db8ed`;
 `developer_main.rs` is
-`bacbb8f0e125c4c678bc877aef7ab0c07fe337e3ce05ae610cdd8ef2a5234708`.
+`c4674fc8ef405304c8ffee57840328d22665d7d3ecf5ee3d6f61724c9a3b12ea`.
 The installed Mac executable retains the recorded `8ae71c8b...` digest above.
-SQLite integrity was `ok`, all 26 queue entries matched the pre-install backup,
+SQLite integrity was `ok`, all 27 queue entries matched the pre-install backup
+(the previous 26 plus the newly queued fresh proof),
 real local model health was `ok`, and demo6 retained `succeeded` /
 `review_7_approved` after reconnect. The Windows directory is a nongit runtime
 source archive, so these digests establish its source/binary identity; it has no

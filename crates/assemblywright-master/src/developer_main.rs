@@ -1671,10 +1671,9 @@ fn terminal_clean_empty_staged_no_op(feature: &Feature) -> Result<Option<&Staged
     if proposal.status != "no_op" {
         return Ok(None);
     }
-    let binding = proposal
-        .staged_binding
-        .as_ref()
-        .context("Terminal empty staged no-op has no execution binding")?;
+    let Some(binding) = proposal.staged_binding.as_ref() else {
+        return Ok(None);
+    };
     if feature.status != "failed"
         || feature.auto_repair_lifecycle != "running"
         || feature.escalation_pending
@@ -28421,6 +28420,20 @@ mod tests {
                 .expect("fixture must reserve the empty staged attempt");
             let (stage, _) =
                 complete_zero_ledger_staged_no_op(&engine, &feature_id, access_revision);
+
+            if early_review_route {
+                let mut missing_staged_binding =
+                    engine.database.lock().unwrap().state.queue[0].clone();
+                missing_staged_binding
+                    .escalation_proposal
+                    .as_mut()
+                    .unwrap()
+                    .staged_binding = None;
+                assert!(terminal_clean_empty_staged_no_op(&missing_staged_binding)
+                    .unwrap()
+                    .is_none());
+                assert!(automatic_staged_review_checkpoint(&missing_staged_binding).is_none());
+            }
 
             let connection =
                 Connection::open(directory.path().join("data/developer.sqlite3")).unwrap();
