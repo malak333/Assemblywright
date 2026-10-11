@@ -186,13 +186,14 @@ python3 -B scripts/developer-runner-staged-repair-e2e.py --binary target/debug/a
 python3 -B scripts/developer-runner-staged-repair-e2e.py --binary target/debug/assemblywright-developer --candidate-rejection-route-only
 python3 -B scripts/developer-runner-staged-repair-e2e.py --binary target/debug/assemblywright-developer --protected-staged-retry-only
 python3 -B scripts/developer-runner-staged-repair-e2e.py --binary target/debug/assemblywright-developer --empty-staged-retry-only
+python3 -B scripts/developer-runner-staged-repair-e2e.py --binary target/debug/assemblywright-developer --exhausted-source-staged-retry-only
 cargo test -p assemblywright-master --bin assemblywright-developer terminal_staged -- --nocapture
 ```
 
 It forces protected review rejection, staged automatic application, a second
 source-only rejection, ordinary successor repair, fresh validation and a third
 approved review. It asserts the staged application-state binding and immutable
-receipt ancestry. The canonical `developer_workflow_e2e` test includes all four modes of this
+receipt ancestry. The canonical `developer_workflow_e2e` test includes all five modes of this
 harness. The candidate-rejection mode starts with a source-file review finding
 that requests a regression assertion, rejects an ordinary protected-test
 candidate without applying it, and routes directly to staged repair before a
@@ -203,6 +204,10 @@ first staged candidate on protected findings, then requires a second staged
 application and fresh approval without Resume. The empty-staged-retry mode proves
 that a completed, bound, effect-free stage consumes its attempt as `no_op` and
 reserves a fresh attempt without Resume. Unknown or failed executions remain held.
+The exhausted-source mode consumes all three ordinary repairs, applies one staged
+repair, then rejects that candidate on a source-only finding. It requires a fresh
+staged escalation, complete feedback, unchanged validation, and independent
+approval without Resume. This covers the boundary that stranded `aw-fft-demo8`.
 On Windows, first build `developer_review_fixture` with
 `cargo build -p assemblywright-master --example developer_review_fixture`, then
 pass the runner's native `.exe` path through `--binary` and set

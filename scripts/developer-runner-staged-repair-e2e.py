@@ -69,9 +69,12 @@ def main():
         help="prove a protected rejection after staged repair autonomously starts a second staged attempt")
     parser.add_argument("--empty-staged-retry-only", action="store_true",
         help="prove a completed clean empty stage consumes one attempt and autonomously starts a fresh staged attempt")
+    parser.add_argument("--exhausted-source-staged-retry-only", action="store_true",
+        help="prove a source-only rejection after all ordinary repairs autonomously starts a fresh staged attempt")
     args = parser.parse_args()
     selected_modes = sum([args.candidate_rejection_route_only,
-        args.protected_staged_retry_only, args.empty_staged_retry_only])
+        args.protected_staged_retry_only, args.empty_staged_retry_only,
+        args.exhausted_source_staged_retry_only])
     if selected_modes > 1:
         parser.error("select only one staged repair proof mode")
     binary = str(Path(args.binary).resolve())
@@ -123,6 +126,7 @@ def main():
             candidate_route = "candidate-rejection-route" in prompt
             protected_staged_retry = "protected-staged-retry" in prompt
             empty_staged_retry = "empty-staged-retry" in prompt
+            exhausted_source_staged_retry = "exhausted-source-staged-retry" in prompt
             if candidate_route and "repair attempt 1 of 3" in prompt.lower():
                 phase = "ordinary_protected_candidate"
                 code = ("from pathlib import Path; "
@@ -177,6 +181,30 @@ def main():
                 code = ("from pathlib import Path; Path('tests').mkdir(exist_ok=True); "
                     "Path('app.py').write_text('WRONG = 0\\n'); "
                     "Path('tests/test_site.py').write_text('# VALUE = 0\\nassert True\\n')")
+            elif exhausted_source_staged_retry and "repair attempt" in prompt.lower():
+                attempt = 1 + sum(
+                    phase.startswith("exhausted_source_ordinary_") for phase in phases)
+                phase = f"exhausted_source_ordinary_{attempt}"
+                code = "from pathlib import Path; Path('app.py').write_text('VALUE = 0\\n')"
+            elif exhausted_source_staged_retry and staged_prompt:
+                staged_attempt = 1 + sum(
+                    phase.startswith("exhausted_source_staged_") for phase in phases)
+                phase = f"exhausted_source_staged_{staged_attempt}"
+                if staged_attempt == 1:
+                    code = ("from pathlib import Path; "
+                        "Path('app.py').write_text('VALUE = 0\\n'); "
+                        "Path('tests/test_site.py').write_text('assert True\\n'); "
+                        "Path('stage.txt').write_text('source staged repair 1\\n')")
+                else:
+                    code = ("from pathlib import Path; "
+                        "Path('app.py').write_text('VALUE = 1\\n'); "
+                        "Path('tests/test_site.py').write_text('assert True\\n'); "
+                        "Path('stage.txt').write_text('source staged repair 2\\n')")
+            elif exhausted_source_staged_retry:
+                phase = "exhausted_source_initial"
+                code = ("from pathlib import Path; Path('tests').mkdir(exist_ok=True); "
+                    "Path('app.py').write_text('VALUE = 0\\n'); "
+                    "Path('tests/test_site.py').write_text('assert True\\n')")
             elif "repair attempt 1 of 3" in prompt.lower():
                 phase = "ordinary_successor"
                 code = "from pathlib import Path; Path('app.py').write_text('VALUE = 1\\n')"
@@ -217,9 +245,14 @@ def main():
     windows_model = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Model)
     model.daemon_threads = True
     windows_model.daemon_threads = True
-    threading.Thread(target=model.serve_forever, daemon=True).start()
-    threading.Thread(target=windows_model.serve_forever, daemon=True).start()
+    model_threads = [
+        threading.Thread(target=model.serve_forever, daemon=True),
+        threading.Thread(target=windows_model.serve_forever, daemon=True),
+    ]
+    for thread in model_threads:
+        thread.start()
 
+    result = None
     with tempfile.TemporaryDirectory(prefix="aw-staged-repair-lineage-e2e-") as temporary:
         root = Path(temporary)
         data, projects = root / "state", root / "projects"
@@ -295,6 +328,43 @@ def main():
             raise AssertionError("Timed out: " + json.dumps(
                 timeout_diagnostic(state, timeout), sort_keys=True))
 
+        def stop_fixture_runner(require_graceful):
+            if process.poll() is not None:
+                if require_graceful and process.returncode != 0:
+                    raise AssertionError(
+                        f"fixture runner exited with status {process.returncode}")
+                return
+            graceful_error = None
+            if token:
+                try:
+                    api("control", {"action": "shutdown"})
+                except OSError as error:
+                    # The authenticated request may have reached the runner before
+                    # the HTTP connection closed. Give Rust Drop time to reap the
+                    # fixture-owned OpenCode process before using the fallback.
+                    graceful_error = error
+                try:
+                    process.wait(timeout=30)
+                    if process.returncode != 0:
+                        raise AssertionError(
+                            f"fixture runner shutdown exited with status {process.returncode}")
+                    return
+                except subprocess.TimeoutExpired as error:
+                    graceful_error = error
+            else:
+                graceful_error = AssertionError(
+                    "fixture runner token was unavailable for authenticated shutdown")
+            process.terminate()
+            try:
+                process.wait(timeout=15)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=15)
+            if require_graceful:
+                raise AssertionError(
+                    "fixture runner required forced termination after successful proof"
+                ) from graceful_error
+
         try:
             deadline = time.monotonic() + 20
             ready = False
@@ -324,7 +394,9 @@ def main():
             project_name = ("candidate-rejection-route"
                 if args.candidate_rejection_route_only else
                 "protected-staged-retry" if args.protected_staged_retry_only else
-                "empty-staged-retry" if args.empty_staged_retry_only else "lineage")
+                "empty-staged-retry" if args.empty_staged_retry_only else
+                "exhausted-source-staged-retry" if args.exhausted_source_staged_retry_only else
+                "lineage")
             instruction = ((
                 "Build the candidate-rejection-route fixture "
                 "[fixture:source-regression]. The source correction must preserve the "
@@ -336,6 +408,10 @@ def main():
                 "Build the empty-staged-retry fixture [fixture:reject-zero]. "
                 "A clean completed empty attempt must consume its bound and continue."
             ) if args.empty_staged_retry_only else (
+                "Build the exhausted-source-staged-retry fixture [fixture:reject-zero]. "
+                "After three source-only ordinary repairs, a rejected staged repair must "
+                "continue with a fresh staged repair."
+            ) if args.exhausted_source_staged_retry_only else (
                 "Build the lineage fixture [fixture:reject-zero]. "
                 "The first protected blocker requires staged repair; any later source "
                 "blocker must use ordinary repair."
@@ -349,7 +425,7 @@ def main():
                 "expected_model_target": feature["model_target"],
                 "expected_status": feature["status"],
                 "expected_checkpoint": feature["checkpoint"]})
-            workflow_timeout = 240 if (
+            workflow_timeout = 480 if args.exhausted_source_staged_retry_only else 240 if (
                 args.protected_staged_retry_only or args.empty_staged_retry_only
             ) else 150
             completed = wait(lambda state: not state["running"] and
@@ -357,14 +433,15 @@ def main():
                 == "succeeded", timeout=workflow_timeout)
             public = next(item for item in completed["queue"] if item["id"] == feature_id)
             expected_repairs = 0 if (args.protected_staged_retry_only or
-                args.empty_staged_retry_only) else 1
+                args.empty_staged_retry_only) else 3 if \
+                args.exhausted_source_staged_retry_only else 1
             expected_escalations = 2 if (args.protected_staged_retry_only or
-                args.empty_staged_retry_only) else 1
+                args.empty_staged_retry_only or args.exhausted_source_staged_retry_only) else 1
             assert public["repair_attempts"] == expected_repairs, public
             assert public["escalation_count"] == expected_escalations, public
             expected_review_attempts = 2 if (
                 args.candidate_rejection_route_only or args.empty_staged_retry_only
-            ) else 3
+            ) else 6 if args.exhausted_source_staged_retry_only else 3
             assert public["review_attempts"] == expected_review_attempts, public
             if args.candidate_rejection_route_only:
                 assert phases == ["candidate_route_initial", "ordinary_protected_candidate",
@@ -375,6 +452,10 @@ def main():
             elif args.empty_staged_retry_only:
                 assert phases == ["empty_retry_initial", "empty_staged_1",
                     "empty_staged_2"], phases
+            elif args.exhausted_source_staged_retry_only:
+                assert phases == ["exhausted_source_initial", "exhausted_source_ordinary_1",
+                    "exhausted_source_ordinary_2", "exhausted_source_ordinary_3",
+                    "exhausted_source_staged_1", "exhausted_source_staged_2"], phases
             else:
                 assert phases == [
                     "initial", "staged_automatic", "ordinary_successor"], phases
@@ -393,7 +474,7 @@ def main():
             proposal = feature["escalation_proposal"]
             expected_proposal_status = ("succeeded"
                 if args.candidate_rejection_route_only or args.protected_staged_retry_only or
-                args.empty_staged_retry_only
+                args.empty_staged_retry_only or args.exhausted_source_staged_retry_only
                 else "failed")
             assert proposal["status"] == expected_proposal_status and proposal["staged_binding"]
             assert proposal["application_state_sha256"]
@@ -401,7 +482,9 @@ def main():
                 if item["proposal_id"] == proposal["proposal_id"]]
             assert [item["outcome"] for item in receipts] == [
                 "ready", "policy_authorized", expected_proposal_status], receipts
-            if not args.protected_staged_retry_only and not args.empty_staged_retry_only:
+            if (not args.protected_staged_retry_only and
+                    not args.empty_staged_retry_only and
+                    not args.exhausted_source_staged_retry_only):
                 repair = feature["repair_history"][0]
                 expected_prior_review = ("review_1_rejected"
                     if args.candidate_rejection_route_only else "review_2_rejected")
@@ -453,6 +536,23 @@ def main():
                 assert stage_rows[0] == ("compacted", 0, 0, 0, 0), stage_rows
                 assert stage_rows[1][0] == "compacted" and stage_rows[1][1] > 0, stage_rows
                 assert payload_count == 0
+            elif args.exhausted_source_staged_retry_only:
+                assert proposal["feature_checkpoint"] == "review_5_rejected"
+                assert [item["outcome"] for item in feature["review_history"]] == [
+                    "rejected", "rejected", "rejected", "rejected", "rejected", "approved"]
+                assert [item["blocking_findings"][0]["path"]
+                    for item in feature["review_history"][:5]] == [
+                        "app.py", "app.py", "app.py", "app.py", "app.py"]
+                assert len(feature["repair_history"]) == 3
+                assert [item["prior_checkpoint"] for item in feature["repair_history"]] == [
+                    "review_1_rejected", "review_2_rejected", "review_3_rejected"]
+                proposal_receipts = {}
+                for receipt in feature["escalation_history"]:
+                    proposal_receipts.setdefault(receipt["proposal_id"], []).append(
+                        receipt["outcome"])
+                assert list(proposal_receipts.values()) == [
+                    ["ready", "policy_authorized", "failed"],
+                    ["ready", "policy_authorized", "succeeded"]], proposal_receipts
             else:
                 feedback = json.loads(repair["prior_message"])
                 assert feedback["feedback"]["blocking_findings"][0]["path"] == "app.py"
@@ -463,8 +563,7 @@ def main():
             if args.candidate_rejection_route_only:
                 calls_before_malformed = list(phases)
                 reviews_before_malformed = len(feature["review_history"])
-                process.terminate()
-                process.wait(timeout=15)
+                stop_fixture_runner(require_graceful=True)
                 with closing(sqlite3.connect(data / "developer.sqlite3")) as database:
                     persisted = json.loads(database.execute(
                         "SELECT state FROM developer_state WHERE id=1").fetchone()[0])
@@ -526,21 +625,25 @@ def main():
                 assert len(durable_held["review_history"]) == reviews_before_malformed - 1
                 assert durable_held["repair_history"] == []
                 malformed_linkage_held = True
-            print(json.dumps({"platform": sys.platform,
+            result = {"platform": sys.platform,
                 "protected_review_routes_to_staged_automatic": True,
                 "staged_application_state_bound": True,
                 "source_only_review_routes_to_ordinary_successor":
                     not args.candidate_rejection_route_only and
                     not args.protected_staged_retry_only and
-                    not args.empty_staged_retry_only,
+                    not args.empty_staged_retry_only and
+                    not args.exhausted_source_staged_retry_only,
                 "ordinary_successor_revalidated_and_freshly_reviewed":
                     not args.candidate_rejection_route_only and
                     not args.protected_staged_retry_only and
-                    not args.empty_staged_retry_only,
+                    not args.empty_staged_retry_only and
+                    not args.exhausted_source_staged_retry_only,
                 "protected_staged_rejection_autonomously_retries_staged":
                     args.protected_staged_retry_only,
                 "completed_empty_stage_autonomously_retries_staged":
                     args.empty_staged_retry_only,
+                "exhausted_source_review_autonomously_retries_staged":
+                    args.exhausted_source_staged_retry_only,
                 "candidate_rejection_routes_before_ordinary_attempt_two":
                     args.candidate_rejection_route_only,
                 "candidate_rejection_preserves_exact_review_feedback":
@@ -548,14 +651,22 @@ def main():
                 "malformed_candidate_review_linkage_holds": malformed_linkage_held,
                 "repair_attempts": public["repair_attempts"],
                 "escalation_count": public["escalation_count"],
-                "review_attempts": public["review_attempts"]}))
+                "review_attempts": public["review_attempts"]}
         finally:
-            if process.poll() is None:
-                process.terminate()
-                process.wait(timeout=15)
-            log.close()
-            model.shutdown()
-            windows_model.shutdown()
+            try:
+                stop_fixture_runner(require_graceful=result is not None)
+            finally:
+                log.close()
+                model.shutdown()
+                windows_model.shutdown()
+                model.server_close()
+                windows_model.server_close()
+                for thread in model_threads:
+                    thread.join(timeout=5)
+                    if thread.is_alive():
+                        raise AssertionError("fixture model server did not stop")
+
+    print(json.dumps(result))
 
 
 if __name__ == "__main__":

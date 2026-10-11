@@ -73,7 +73,11 @@ repairs for the first failed feature. Windows snapshots a per-feature limit of
 `1...100`, preserves the three ordinary attempts and cumulative escalation evidence,
 keeps the validation command immutable, and requires independent Codex approval
 before success or auto-run advancement. Operational ambiguity stops and quarantines
-rather than replaying effects. See also
+rather than replaying effects. A rejected, fully applied automatic staged candidate
+continues under the same policy after its complete application and review ancestry
+is verified. Source-only findings use remaining ordinary attempts, then the next
+bounded escalation; protected-input findings enter escalation directly. Exhausted
+ordinary attempts alone cannot strand a running automatic loop. See also
 [`docs/developer-chat-repair-design.md`](docs/developer-chat-repair-design.md).
 
 The owner approved [scalable Developer repair](docs/developer-scalable-repair-design.md):

@@ -107,6 +107,12 @@ Automatic escalation may correct existing admitted test inputs under that exact
 candidate and independent-review authority. Its protected-input state must be
 computed from the baseline plus authorized applied paths; ordinary repairs retain
 their narrower restrictions. Changing the validation command remains prohibited.
+After a fully applied automatic staged candidate is rejected, a complete exact
+terminal application/review chain may authorize the next serial repair under the
+enabled running policy. Source-only findings use an ordinary attempt when one
+remains, otherwise bounded automatic escalation. Protected findings enter
+escalation directly. Neither path replenishes counters or bypasses the shared cap,
+current-byte checks, cancellation, operational holds, or fresh independent review.
 See [`developer-scalable-repair-design.md`](developer-scalable-repair-design.md).
 Successful, exactly bound, cleaned stages with no raw mutations and zero ledger
 counts may consume an attempt as effect-free `no_op` and reserve a fresh automatic

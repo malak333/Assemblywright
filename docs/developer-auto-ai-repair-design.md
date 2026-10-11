@@ -142,6 +142,10 @@ against exact durable state:
    bytes, run the immutable validation command, and request fresh Codex review.
 6. On validation failure, review rejection, no-op, or duplicate candidate, finish
    the attempt evidence and begin the next eligible cycle.
+   This includes a source-only rejection after a fully applied staged repair:
+   verify its exact terminal application, candidate and review ancestry, use any
+   remaining ordinary attempt, then continue through bounded automatic escalation.
+   The ordinary three-attempt ceiling is a route change, not an automatic hold.
 7. On validation and review success, continue through the existing local-only or
    publication completion path. Auto-run alone decides whether the next feature
    begins.
