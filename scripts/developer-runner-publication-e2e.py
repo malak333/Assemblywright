@@ -147,7 +147,9 @@ def main():
                 response = error.read(16 * 1024)
                 error.fp = io.BytesIO(response)
                 error.response_body = response
-                error.add_note("bounded response: " + response.decode(errors="replace"))
+                add_note = getattr(BaseException, "add_note", None)
+                if add_note is not None:
+                    add_note(error, "bounded response: " + response.decode(errors="replace"))
                 raise
 
         def rejected(path, body):

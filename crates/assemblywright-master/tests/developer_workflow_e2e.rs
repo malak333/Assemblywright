@@ -98,6 +98,7 @@ fn supervised_developer_workflow_runs_native_processes_and_recovers_checkpoints(
                 "--candidate-rejection-route-only",
                 "--protected-staged-retry-only",
                 "--empty-staged-retry-only",
+                "--exhausted-source-staged-retry-only",
             ] {
                 let mut candidate_rejection = std::process::Command::new(python);
                 candidate_rejection

@@ -2851,8 +2851,10 @@ consistency.
   findings, then recheck evidence and project identity at reservation. Preserve
   ordinary counters, shared escalation limits, quarantine and fresh review.
 - A fully applied automatic staged candidate rejected by review is terminal audit
-  ancestry. If the new exact v2 blockers are source-only, reserve the ordinary
-  successor immediately from that decision; do not send the terminal proposal
+  ancestry. If the new exact v2 blockers are source-only and an ordinary attempt
+  remains, reserve that successor immediately from the decision. After all three
+  ordinary attempts, continue through the next bounded automatic escalation;
+  do not send the terminal proposal
   back through active staged-validation recovery. Keep its manifest, application
   state, three receipts and rejected packet/batch bindings intact while later
   authorized source bytes and independent review slots advance.
@@ -3614,3 +3616,40 @@ consistency.
   files. One inspected public Resume was needed for its empty fifth attempt
   before this correction. Keep that limitation distinct from the new native
   no-Resume regression and from GitHub source publication.
+
+## Source-only rejection after exhausted ordinary repair
+
+- A complete staged rejection with source-only findings remains repairable when
+  all three ordinary attempts have been consumed. Verify its exact terminal
+  application/review ancestry, retain full current feedback, and schedule the
+  next serial escalation under the existing policy and shared cap.
+- Inspect both the volatile runner state and durable automatic lifecycle when
+  diagnosing a stalled run. `running=false` with a failed review checkpoint,
+  lifecycle `running`, and remaining budget can reveal a missing continuation
+  route rather than a slow model or a spent repair limit.
+- The regression must reject an escalation after the ordinary counter is already
+  three, then require another automatic escalation. Merely exhausting ordinary
+  attempts before an immediately successful escalation does not reproduce this
+  failure. See [the validation record](../developer-source-review-continuation-validation.md).
+- Before deleting a native runner fixture's temporary directory, request its
+  authenticated shutdown and wait for Rust teardown to reap fixture-owned
+  OpenCode. A forced runner termination can leave the Windows npm cache in use.
+  Require a zero runner exit and complete directory cleanup before emitting
+  successful proof JSON; fallback termination remains failure cleanup only.
+- Native HTTP rejection fixtures run on Python 3.10 as well as newer Python.
+  Feature-detect `BaseException.add_note` on the exception class, rather than on
+  `HTTPError`, whose missing-attribute forwarding can reach its response stream.
+  Keep the bounded response, restored readable error body, original HTTP error,
+  and authentication/redaction/publication assertions intact.
+- The original `aw-fft-demo8` reached `succeeded` / `review_18_approved` after
+  its unchanged Windows validation passed 99 tests. Three ordinary attempts,
+  fourteen escalations, eighteen reviews, and all other 28 queue entries were
+  retained; the app made every website repair. One parent Resume retried an
+  unavailable reviewer after review 16. Record that interruption separately from
+  the no-Resume native regression and the repaired automatic continuation route.
+- On the exact final installed runner, fresh local project
+  `aw-autonomous-proof-20261011` completed real planning, approved queue admission,
+  Windows generation, immutable byte validation, and Codex review as
+  `review_1_approved`, with zero repairs, zero escalations, and no parent mutation
+  after Start. Keep its uninterrupted one-artifact proof distinct from the
+  original website's retained recovery and from publication or signed release.

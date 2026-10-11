@@ -1850,6 +1850,7 @@ fn rejected_review_repair_message(review: &ReviewAttemptEvidence) -> Result<Stri
     Ok(message)
 }
 
+#[derive(Debug, Eq, PartialEq)]
 enum TerminalStagedReviewRepairRoute {
     Ordinary(String),
     StagedAutomatic,
@@ -1895,16 +1896,43 @@ fn completed_empty_staged_candidate_has_zero_mutation_evidence(
 
 fn terminal_staged_review_continuation_authorized(
     route: Option<&TerminalStagedReviewRepairRoute>,
+    repair_attempts: u32,
     auto_policy_enabled: bool,
     auto_repair_lifecycle: &str,
     cancelled: bool,
 ) -> bool {
-    matches!(
-        route,
-        Some(TerminalStagedReviewRepairRoute::StagedAutomatic)
-    ) && auto_policy_enabled
+    let route_authorizes_continuation =
+        matches!(
+            route,
+            Some(TerminalStagedReviewRepairRoute::StagedAutomatic)
+        ) || matches!(route, Some(TerminalStagedReviewRepairRoute::Ordinary(_)))
+            && repair_attempts >= REPAIR_LIMIT;
+    route_authorizes_continuation
+        && auto_policy_enabled
         && auto_repair_lifecycle == "running"
         && !cancelled
+}
+
+fn exhausted_terminal_staged_review_repair_route(
+    feature: &Feature,
+    project: &Path,
+) -> Result<Option<TerminalStagedReviewRepairRoute>> {
+    if feature.repair_attempts < REPAIR_LIMIT
+        || feature.last_failure_kind != "review_rejection"
+        || !terminal_staged_review_route_eligible(feature)
+        || terminal_staged_review_has_ordinary_successor(feature)?
+    {
+        return Ok(None);
+    }
+    Ok(Some(terminal_staged_review_repair_route(
+        feature,
+        &feature.checkpoint,
+        project,
+        feature
+            .edits
+            .as_deref()
+            .context("Exhausted terminal staged rejection has no cumulative candidate")?,
+    )?))
 }
 
 const TERMINAL_STAGED_REVIEW_RESUME_DEFECT_PREFIX: &str =
@@ -6829,6 +6857,8 @@ impl Engine {
             if observed.repair_attempts < REPAIR_LIMIT && !early_staged_review {
                 bail!("Ordinary repair attempts must be exhausted before automatic escalation");
             }
+            let exhausted_terminal_staged_review =
+                exhausted_terminal_staged_review_repair_route(&observed, &project)?;
             if at_limit {
                 let snapshot = admitted_project_snapshot_with_cancellation(
                     &project,
@@ -6837,7 +6867,14 @@ impl Engine {
                 if self.cancelled() {
                     bail!("Automatic repair escalation preparation was cancelled");
                 }
-                return Ok((project, early_staged_review, None, None, Some(snapshot)));
+                return Ok((
+                    project,
+                    early_staged_review,
+                    exhausted_terminal_staged_review,
+                    None,
+                    None,
+                    Some(snapshot),
+                ));
             }
             let target = self.model_target(&observed.model_target)?.clone();
             let project_state_sha256 = project_repair_context_with_cancellation(
@@ -6849,21 +6886,26 @@ impl Engine {
             Ok((
                 project,
                 early_staged_review,
+                exhausted_terminal_staged_review,
                 Some(target),
                 Some(project_state_sha256),
                 None,
             ))
         })();
-        let (project, early_staged_review, target, project_state_sha256, limit_recovery_snapshot) =
-            match preparation {
-                Ok(prepared) => prepared,
-                Err(error) => {
-                    self.terminalize_automatic_reservation_preparation_failure(
-                        &observed, at_limit,
-                    )?;
-                    return Err(error);
-                }
-            };
+        let (
+            project,
+            early_staged_review,
+            exhausted_terminal_staged_review,
+            target,
+            project_state_sha256,
+            limit_recovery_snapshot,
+        ) = match preparation {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                self.terminalize_automatic_reservation_preparation_failure(&observed, at_limit)?;
+                return Err(error);
+            }
+        };
         let proposal_id = Uuid::new_v4().to_string();
         let target_for_state = target.clone();
         let reserved = self.change(|state| {
@@ -6919,6 +6961,11 @@ impl Engine {
                 {
                     bail!("Ordinary repair attempts must be exhausted before automatic escalation");
                 }
+            }
+            let current_exhausted_terminal_staged_review =
+                exhausted_terminal_staged_review_repair_route(feature, &project)?;
+            if current_exhausted_terminal_staged_review != exhausted_terminal_staged_review {
+                bail!("Exhausted terminal staged review binding changed during preparation");
             }
             let limit = feature
                 .auto_ai_repair_limit
@@ -7018,7 +7065,15 @@ impl Engine {
             feature.message = format!("AI escalation {attempt} of {limit} is preparing repair");
             start_auto_repair_step(feature)?;
             Ok(Some((epoch, failure_summary)))
-        })?;
+        });
+        let reserved = match reserved {
+            Ok(reserved) => reserved,
+            Err(error) if exhausted_terminal_staged_review.is_some() => {
+                self.terminalize_automatic_reservation_preparation_failure(&observed, at_limit)?;
+                return Err(error);
+            }
+            Err(error) => return Err(error),
+        };
         match reserved {
             Some((epoch, failure_summary)) => Ok(Some((
                 proposal_id,
@@ -9623,6 +9678,7 @@ impl Engine {
                         let staged_continuation =
                             terminal_staged_review_continuation_authorized(
                                 terminal_staged_review_route.as_ref(),
+                                current.repair_attempts,
                                 auto_policy_enabled,
                                 &current.auto_repair_lifecycle,
                                 self.cancelled(),
@@ -9635,6 +9691,16 @@ impl Engine {
                     let starts_early_staged_review = early_staged_review_selected
                         && auto_policy_enabled
                         && current.auto_repair_lifecycle == "running";
+                    if let Some(TerminalStagedReviewRepairRoute::Ordinary(message)) =
+                        terminal_staged_review_route.as_ref()
+                    {
+                        if auto_policy_enabled
+                            && current.auto_repair_lifecycle == "running"
+                            && !self.cancelled()
+                        {
+                            current.message = message.clone();
+                        }
+                    }
                     if early_staged_review_invalid {
                         if current.auto_repair_lifecycle == "running" {
                             set_auto_repair_lifecycle(
@@ -24240,11 +24306,30 @@ mod tests {
     #[test]
     fn rejected_recovered_review_can_reserve_a_fresh_staged_proposal() {
         let (_directory, engine) = control_test_engine();
-        let mut feature = adopted_automatic_effects_validation_fixture(&engine);
+        let mut feature = active_automatic_staged_validation_fixture(&engine);
+        feature.auto_repair_epoch = feature.auto_repair_epoch.checked_add(1).unwrap();
+        feature.repair_history = (1..=REPAIR_LIMIT)
+            .map(|attempt| RepairAttemptEvidence {
+                attempt,
+                prior_checkpoint: "validation_failed".into(),
+                prior_message: format!("fixture validation failure {attempt}"),
+                prior_edits: Vec::new(),
+            })
+            .collect();
         feature.status = "failed".into();
         feature.checkpoint = "review_2_rejected".into();
         feature.review_status = "rejected".into();
         feature.review_summary = "Independent review rejected the exact candidate".into();
+        feature.review_attempts = 2;
+        feature.review_pending = None;
+        feature.review_history = vec![current_rejected_review(
+            1,
+            vec![DeveloperReviewFinding {
+                finding_id: "protected-first-review".into(),
+                path: "tests/test_first.py".into(),
+                message: "The first rejection required staged repair".into(),
+            }],
+        )];
         feature.last_failure_kind = "review_rejection".into();
         feature.last_code_failure_summary =
             "Independent review rejected the exact candidate".into();
@@ -24256,6 +24341,35 @@ mod tests {
             "Independent review rejected the exact candidate",
         )
         .unwrap();
+        let project = engine.root.join("example");
+        let validation_evidence_sha256 = "b".repeat(64);
+        let packet = developer_review_batch_set(
+            &feature,
+            &project,
+            feature.edits.as_deref().unwrap(),
+            &validation_evidence_sha256,
+        )
+        .unwrap();
+        feature.review_history.push(ReviewAttemptEvidence {
+            attempt: 2,
+            packet_sha256: packet.aggregate_sha256().into(),
+            validation_evidence_sha256,
+            outcome: "rejected".into(),
+            decision_sha256: Some("c".repeat(64)),
+            binding_version: 2,
+            batch_packet_sha256s: packet
+                .batches
+                .iter()
+                .map(|batch| batch.sha256().unwrap())
+                .collect(),
+            batch_receipt_sha256s: packet.batches.iter().map(|_| "e".repeat(64)).collect(),
+            blocking_findings: vec![DeveloperReviewFinding {
+                finding_id: "source-second-review".into(),
+                path: "result.txt".into(),
+                message: "Correct the remaining implementation error".into(),
+            }],
+            summary: "Independent review rejected the exact candidate".into(),
+        });
         assert!(fully_applied_staged_validation_binding(&feature).is_err());
 
         let rejected_proposal_id = feature
@@ -24344,6 +24458,20 @@ mod tests {
             }],
             summary: "fixture source-only rejection".into(),
         });
+        feature
+    }
+
+    fn exhausted_terminal_staged_source_rejection_fixture(engine: &Arc<Engine>) -> Feature {
+        let mut feature = terminal_staged_source_rejection_fixture(engine);
+        feature.repair_attempts = REPAIR_LIMIT;
+        feature.repair_history = (1..=REPAIR_LIMIT)
+            .map(|attempt| RepairAttemptEvidence {
+                attempt,
+                prior_checkpoint: "validation_failed".into(),
+                prior_message: format!("fixture validation failure {attempt}"),
+                prior_edits: Vec::new(),
+            })
+            .collect();
         feature
     }
 
@@ -24509,31 +24637,328 @@ mod tests {
         ));
         assert!(terminal_staged_review_continuation_authorized(
             Some(&route),
+            REPAIR_LIMIT,
             true,
             "running",
             false,
         ));
         assert!(!terminal_staged_review_continuation_authorized(
             Some(&route),
+            REPAIR_LIMIT,
             false,
             "running",
             false,
         ));
         assert!(!terminal_staged_review_continuation_authorized(
             Some(&route),
+            REPAIR_LIMIT,
             true,
             "held",
             false,
         ));
         assert!(!terminal_staged_review_continuation_authorized(
             Some(&route),
+            REPAIR_LIMIT,
             true,
             "running",
             true,
         ));
         assert!(!terminal_staged_review_continuation_authorized(
-            None, true, "running", false,
+            None,
+            REPAIR_LIMIT,
+            true,
+            "running",
+            false,
         ));
+
+        let (_source_directory, source_engine) = control_test_engine();
+        let source_project = source_engine.root.join("example");
+        let source_feature = terminal_staged_source_rejection_fixture(&source_engine);
+        let source_route = terminal_staged_review_repair_route(
+            &source_feature,
+            &source_feature.checkpoint,
+            &source_project,
+            source_feature.edits.as_deref().unwrap(),
+        )
+        .unwrap();
+        assert!(matches!(
+            source_route,
+            TerminalStagedReviewRepairRoute::Ordinary(_)
+        ));
+        assert!(!terminal_staged_review_continuation_authorized(
+            Some(&source_route),
+            REPAIR_LIMIT - 1,
+            true,
+            "running",
+            false,
+        ));
+        assert!(terminal_staged_review_continuation_authorized(
+            Some(&source_route),
+            REPAIR_LIMIT,
+            true,
+            "running",
+            false,
+        ));
+        assert!(!terminal_staged_review_continuation_authorized(
+            Some(&source_route),
+            REPAIR_LIMIT,
+            false,
+            "running",
+            false,
+        ));
+        assert!(!terminal_staged_review_continuation_authorized(
+            Some(&source_route),
+            REPAIR_LIMIT,
+            true,
+            "running",
+            true,
+        ));
+    }
+
+    #[test]
+    fn exhausted_terminal_staged_review_restart_revalidates_before_reservation() {
+        let (_directory, engine) = control_test_engine();
+        let feature = exhausted_terminal_staged_source_rejection_fixture(&engine);
+        let feature_id = feature.id.clone();
+        let policy_revision = feature.auto_repair_policy_revision.unwrap();
+        let limit = feature.auto_ai_repair_limit.unwrap();
+        engine
+            .change(|state| {
+                state.auto_ai_repair_enabled = true;
+                state.auto_ai_repair_max_escalations = limit;
+                state.auto_ai_repair_policy_revision = policy_revision;
+                state.queue[0] = feature.clone();
+                Ok(())
+            })
+            .unwrap();
+        assert!(!engine.repair_loop_authorized.load(Ordering::SeqCst));
+
+        let reserved = engine
+            .reserve_automatic_escalation(&feature_id)
+            .unwrap()
+            .expect("durable exhausted terminal staged review must reserve after restart");
+        let database = engine.database.lock().unwrap();
+        let current = &database.state.queue[0];
+        assert_eq!(reserved.2, feature.auto_repair_epoch);
+        assert_eq!(current.repair_attempts, REPAIR_LIMIT);
+        assert_eq!(current.escalation_count, feature.escalation_count + 1);
+        assert_eq!(current.checkpoint, "escalation_2_preparing");
+        assert_eq!(
+            current
+                .escalation_proposal
+                .as_ref()
+                .unwrap()
+                .feature_checkpoint,
+            "review_2_rejected"
+        );
+    }
+
+    #[test]
+    fn exhausted_ordinary_descendant_after_validation_failures_still_reserves() {
+        let (_directory, engine) = control_test_engine();
+        let mut feature = terminal_staged_source_rejection_fixture(&engine);
+        let prior_review = feature.review_history.last().unwrap().clone();
+        let staged_prior_edits = feature
+            .escalation_proposal
+            .as_ref()
+            .unwrap()
+            .staged_candidate_manifest
+            .iter()
+            .map(|entry| RepairEditEvidence {
+                path: entry.path.clone(),
+                before: entry.before_sha256.clone(),
+                content_hash: entry.content_sha256.clone(),
+            })
+            .collect();
+        feature.repair_attempts = REPAIR_LIMIT;
+        feature.repair_history = vec![
+            RepairAttemptEvidence {
+                attempt: 1,
+                prior_checkpoint: "review_2_rejected".into(),
+                prior_message: rejected_review_repair_message(&prior_review).unwrap(),
+                prior_edits: staged_prior_edits,
+            },
+            RepairAttemptEvidence {
+                attempt: 2,
+                prior_checkpoint: "validation_failed".into(),
+                prior_message: "fixture validation failure 2".into(),
+                prior_edits: Vec::new(),
+            },
+            RepairAttemptEvidence {
+                attempt: 3,
+                prior_checkpoint: "validation_failed".into(),
+                prior_message: "fixture validation failure 3".into(),
+                prior_edits: Vec::new(),
+            },
+        ];
+        feature.checkpoint = "review_3_rejected".into();
+        feature.review_attempts = 3;
+        let project = engine.root.join("example");
+        let validation_evidence_sha256 = "9".repeat(64);
+        let packet = developer_review_batch_set(
+            &feature,
+            &project,
+            feature.edits.as_deref().unwrap(),
+            &validation_evidence_sha256,
+        )
+        .unwrap();
+        feature.review_history.push(ReviewAttemptEvidence {
+            attempt: 3,
+            packet_sha256: packet.aggregate_sha256().into(),
+            validation_evidence_sha256,
+            outcome: "rejected".into(),
+            decision_sha256: Some("8".repeat(64)),
+            binding_version: 2,
+            batch_packet_sha256s: packet
+                .batches
+                .iter()
+                .map(|batch| batch.sha256().unwrap())
+                .collect(),
+            batch_receipt_sha256s: packet.batches.iter().map(|_| "7".repeat(64)).collect(),
+            blocking_findings: vec![DeveloperReviewFinding {
+                finding_id: "ordinary-descendant".into(),
+                path: "result.txt".into(),
+                message: "Correct the remaining ordinary repair defect".into(),
+            }],
+            summary: "fixture ordinary descendant rejection".into(),
+        });
+        feature.review_status = "rejected".into();
+        feature.review_summary = "fixture ordinary descendant rejection".into();
+        feature.last_failure_kind = "review_rejection".into();
+        feature.last_code_failure_summary = feature.review_summary.clone();
+        feature.message = feature.review_summary.clone();
+        assert!(terminal_staged_review_has_ordinary_successor(&feature).unwrap());
+        assert!(
+            exhausted_terminal_staged_review_repair_route(&feature, &project)
+                .unwrap()
+                .is_none()
+        );
+
+        let feature_id = feature.id.clone();
+        let policy_revision = feature.auto_repair_policy_revision.unwrap();
+        let limit = feature.auto_ai_repair_limit.unwrap();
+        engine
+            .change(|state| {
+                state.auto_ai_repair_enabled = true;
+                state.auto_ai_repair_max_escalations = limit;
+                state.auto_ai_repair_policy_revision = policy_revision;
+                state.queue[0] = feature.clone();
+                Ok(())
+            })
+            .unwrap();
+        assert!(engine
+            .reserve_automatic_escalation(&feature_id)
+            .unwrap()
+            .is_some());
+        let database = engine.database.lock().unwrap();
+        assert_eq!(database.state.queue[0].escalation_count, 2);
+        assert_eq!(database.state.queue[0].checkpoint, "escalation_2_preparing");
+    }
+
+    #[test]
+    fn exhausted_terminal_staged_review_drift_holds_without_reservation() {
+        for drift in ["packet", "receipt", "current_bytes", "repair_history"] {
+            let (_directory, engine) = control_test_engine();
+            let mut feature = exhausted_terminal_staged_source_rejection_fixture(&engine);
+            match drift {
+                "packet" => {
+                    feature.review_history.last_mut().unwrap().packet_sha256 = "f".repeat(64)
+                }
+                "receipt" => {
+                    feature
+                        .escalation_history
+                        .iter_mut()
+                        .find(|evidence| evidence.outcome == "failed")
+                        .unwrap()
+                        .proposal_sha256 = Some("f".repeat(64));
+                }
+                "current_bytes" => {
+                    fs::write(engine.root.join("example/result.txt"), b"drifted\n").unwrap();
+                }
+                "repair_history" => {
+                    feature.repair_history.pop();
+                }
+                _ => unreachable!(),
+            }
+            let feature_id = feature.id.clone();
+            let policy_revision = feature.auto_repair_policy_revision.unwrap();
+            let limit = feature.auto_ai_repair_limit.unwrap();
+            let escalation_count = feature.escalation_count;
+            let evidence = serde_json::to_vec(&feature.escalation_history).unwrap();
+            engine
+                .change(|state| {
+                    state.auto_ai_repair_enabled = true;
+                    state.auto_ai_repair_max_escalations = limit;
+                    state.auto_ai_repair_policy_revision = policy_revision;
+                    state.queue[0] = feature.clone();
+                    Ok(())
+                })
+                .unwrap();
+
+            assert!(
+                engine.reserve_automatic_escalation(&feature_id).is_err(),
+                "{drift}"
+            );
+            let database = engine.database.lock().unwrap();
+            let retained = &database.state.queue[0];
+            assert_eq!(retained.auto_repair_lifecycle, "held", "{drift}");
+            assert_eq!(retained.escalation_count, escalation_count, "{drift}");
+            assert_eq!(
+                serde_json::to_vec(&retained.escalation_history).unwrap(),
+                evidence,
+                "{drift}"
+            );
+            assert_eq!(retained.checkpoint, "review_2_rejected", "{drift}");
+        }
+    }
+
+    #[test]
+    fn exhausted_terminal_staged_reservation_requires_live_authority() {
+        for condition in ["policy_disabled", "held", "cancelled"] {
+            let (_directory, engine) = control_test_engine();
+            let mut feature = exhausted_terminal_staged_source_rejection_fixture(&engine);
+            if condition == "held" {
+                set_auto_repair_lifecycle(&mut feature, "held", "fixture held authority").unwrap();
+            }
+            let feature_id = feature.id.clone();
+            let policy_revision = feature.auto_repair_policy_revision.unwrap();
+            let limit = feature.auto_ai_repair_limit.unwrap();
+            let escalation_count = feature.escalation_count;
+            let evidence = serde_json::to_vec(&feature.escalation_history).unwrap();
+            let proposal = serde_json::to_vec(&feature.escalation_proposal).unwrap();
+            engine
+                .change(|state| {
+                    state.auto_ai_repair_enabled = condition != "policy_disabled";
+                    state.auto_ai_repair_max_escalations = limit;
+                    state.auto_ai_repair_policy_revision = policy_revision;
+                    state.queue[0] = feature.clone();
+                    Ok(())
+                })
+                .unwrap();
+            if condition == "cancelled" {
+                engine.cancellation.store(1, Ordering::SeqCst);
+            }
+
+            let reserved = engine.reserve_automatic_escalation(&feature_id);
+            if condition == "cancelled" {
+                assert!(reserved.is_err(), "{condition}");
+            } else {
+                assert!(reserved.unwrap().is_none(), "{condition}");
+            }
+            let database = engine.database.lock().unwrap();
+            let retained = &database.state.queue[0];
+            assert_eq!(retained.escalation_count, escalation_count, "{condition}");
+            assert_eq!(
+                serde_json::to_vec(&retained.escalation_history).unwrap(),
+                evidence,
+                "{condition}"
+            );
+            assert_eq!(
+                serde_json::to_vec(&retained.escalation_proposal).unwrap(),
+                proposal,
+                "{condition}"
+            );
+        }
     }
 
     #[test]
