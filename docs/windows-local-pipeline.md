@@ -1068,6 +1068,38 @@ scheduling and final reads. Each publication action gets a fresh control. The
 configured-workflow budget regression, cancellation, lost-authority and expired
 deadline tests protect the relationship without disabling a failure check.
 
+### Captured-process regression measurement on a clean hosted runner
+
+The production Windows build passed on source `77163a8`, and the seven isolated
+ChatGPT cases passed again. Its GUI gate then stopped in the captured-process
+regression: aggregate handles rose from 299 to 344, above the original tolerance
+of 32. That early failure preceded UIA and is retained in
+`target/publication/windows-local-77163-failure.log`.
+
+The fixture now primes its own runtime work and requires two full 320-child
+warm-up windows that establish no new handle/thread high-water mark, with a
+bounded recent range, before measuring the same 320 captures from the actual
+last sample. This permits runtime oscillation while rejecting ongoing growth.
+The warm-up has a fixed upper
+bound; all child output, exit, launch-failure, completion and executable-release
+checks remain. The leak tolerance stays 32. A negative control retains 33 actual
+process handles, requires rejection, disposes them and requires recovery. Schema
+v2 records warm-up, baseline/final and negative-control diagnostics before a
+failure is raised, and incomplete checks remain unconfirmed. The production
+helper and installed GUI bytes are unchanged by this measurement correction.
+
+Final fixture SHA-256
+`38c83fdf6e1e3d72ee24cb451a093ca45cc5e2490d49aa01cfb380070493cc6b`
+passed a normal run, two constrained single-CPU runs and the parent's native
+Windows PowerShell rerun. The parent recorded 455 handles / 46 threads before
+and after all 320 measured children, rejected 33 retained handles and recovered
+after disposal. Proof is retained as
+`target/publication/parent-stabilized-capture-final.json` and
+`process-capture-highwater-singlecpu-run*.json`. An injected failure retained
+its diagnostics with null actual results and an empty assertions array in
+`process-capture-injected-failure-final.json`. Independent high-risk review
+approved the exact final fixture, evidence and docs.
+
 The intervening saved reviewer `gpt-6.1-sol/medium` returned `READY` through an
 actual response-only call on this installation; its selection was preserved.
 Current successful availability does not erase an earlier account rejection or

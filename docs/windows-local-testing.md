@@ -13,7 +13,7 @@ The generated Final Fantasy Tactics site has its own Playwright browser suite.
 | ChatGPT selections and provider boundary | Authenticated catalog parsing, unsupported model/effort rejection, bounded output, runtime identity, strict response shapes | Seven explicit-feature native cases cover planning/local implementation/review, provider rejection, stop/pause, review evidence and tool-disabled contained children |
 | Settings and right-pane chat | Catalog display/ID binding, effort defaults, stale revisions, legacy migration, history bounds and cloud history isolation | Native UIA saves/reloads independent roles; chat reply, stop, pause, active close and no execution/queue authority |
 | Queue and process supervision | FIFO persistence, malformed/recovered state, exact terminal ownership, reentrancy, cleanup, bounded shared JSON reads and real Windows transient/persistent replacement locks | Sequential features, failure/cancel/restart, stop during preflight, interrupted recovery and failed-cancel window retention |
-| Captured native responses | Windows argument quoting and stream ownership | 320 immediate real child exits cover exact stdout/stderr, newline/EOF termination, success/nonzero exit codes, missing-executable failure and handle release; production helper compiled directly |
+| Captured native responses | Windows argument quoting and stream ownership | 320 immediate real child exits cover exact stdout/stderr, newline/EOF termination, success/nonzero exit codes, missing-executable failure and handle release; production helper compiled directly, bounded runtime stabilization and a retained-process-handle negative control |
 | Global permissions | Strict mode/revision acknowledgements and exact approval bindings | Ask approve/reject, Auto/Full edit and command behavior, stopped effects and stale approvals |
 | GitHub setup and publication | Canonical Windows paths, repository/visibility validation, exact run/candidate/connection/receipt bindings, explicit throttling classification, bounded backoff and redaction | Native cases cover private creation, required-check polling/failure, `Retry-After`, repeated and alternating throttling, cancel/pause during backoff, ambiguous merge/reconciliation, real runner candidates and two successive clean source updates |
 | Generated website | Existing pure filter/movement assertions in the owner suite | Twenty-four Chromium/Firefox/WebKit groups cover semantic content/assets, search/filter recovery, keyboard details, movement, responsive layouts, strict paired screenshots, traces and error-free assets |
@@ -88,6 +88,14 @@ Fast-exit response capture is a separate native cross-process regression in
 start before exit notification is enabled; the returned task completes after
 stream drainage and process disposal. This exercises the actual helper instead
 of mocking the race or adding another nominal GUI self-test group.
+The fixture primes its own ThreadPool and requires two full-workload windows
+that establish no new handle/thread peak, with a bounded recent range, before
+recording its actual last sample as the measurement baseline. It keeps the original
+32-handle bound across the 320 measured children, deliberately opens 33 process
+handles to prove rejection, then proves recovery after disposal. Schema v2
+evidence retains warm-up, baseline/final and negative-control samples even when
+the harness fails; an incomplete failed run does not claim passed assertions.
+This adjusts test measurement only; the installed production helper is unchanged.
 
 The corrected current native journey is
 `5f887284abdd4eb182667109ca93425f`; its submitted demo job and twelve-test

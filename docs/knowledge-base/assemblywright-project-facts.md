@@ -443,6 +443,14 @@ These notes capture durable facts for future agents working on this repository.
   Its existing secured four-argument mutex constructor is unavailable in
   PowerShell 7.6. The native 5.1 SelfTest passed; retain the separate compatibility
   diagnostic instead of treating that optional probe as production GUI evidence.
+- Aggregate process handle counts include CLR and ThreadPool resources as well
+  as captured children. A clean hosted runner exposed growth after the original
+  short warm-up (299 to 344 handles). Establish a bounded stable handle/thread
+  baseline before measuring the same 320 children; keep the original leak
+  tolerance and prove the detector rejects deliberately retained process handles
+  and recovers after disposal. Record warm-up and final samples rather than
+  increasing the tolerance to accommodate a machine. Failed fixture evidence
+  must mark incomplete checks as unconfirmed.
 - Model availability can change while the cached catalog and executable remain
   the same. The later saved GPT-6.1-Sol/medium selection returned READY through
   a real response-only probe on 2026-10-13. Retain the earlier account rejection
