@@ -85,6 +85,8 @@ overrides, and confirms the root instructions reference every role.
 
 ## Feature And Phase Closeout
 
+The owner's standing closeout instruction (2026-10-13) requires the applicable documentation and knowledge-base update, unit and E2E workflows, independent review, scoped push/PR merge and verified hosted gates for every authorized feature or phase. Preserve unrelated uncommitted work. The E2E technology follows the actual boundary: browser matrices for generated sites, native process/protocol/UI Automation for the Windows app.
+
 Every feature or phase closes as one auditable slice. Before publication:
 
 1. Re-read the applicable accepted design, safety rules, requirements, and

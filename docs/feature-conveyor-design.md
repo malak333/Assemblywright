@@ -6,6 +6,12 @@ The default [production product](production-build.md) now uses the supervised
 Developer workflow. Its promotion does not activate this document's unavailable
 effects or satisfy its protected-host evidence gates.
 
+2026-10-12 scope update: `docs/windows-local-pipeline.md` takes precedence for
+the first supported same-computer Windows execution path. The default-inert
+distributed kernel and six-receipt activation ceremony below belong to the
+deferred distributed lane. The Windows local runner executes jobs directly
+through local inference, validation, repair, and review without those receipts.
+
 Status: APPROVED by owner and structured multi-agent design review
 
 Date: 2026-07-24

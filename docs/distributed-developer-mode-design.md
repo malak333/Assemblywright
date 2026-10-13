@@ -26,6 +26,11 @@ Invalid stores block startup, printable-ASCII model IDs are required, and a
 target relay validates before promotion is persisted. This is model selection
 only and does not reopen the general capability-rebind ceremony.
 
+2026-10-12 scope update: same-computer Windows execution is the first supported
+workflow, governed by `docs/windows-local-pipeline.md`. This document describes
+the deferred distributed target. Mac control and Mac inference are not required
+by the Windows local runner.
+
 Status: APPROVED by owner and structured multi-agent design review; implementation planning permitted
 
 Date: 2026-07-16

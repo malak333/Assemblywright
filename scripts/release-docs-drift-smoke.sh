@@ -130,6 +130,11 @@ WINDOWS_REPOSITORY_ONBOARDING="scripts/windows-repository-onboarding.ps1"
 WINDOWS_REPOSITORY_ONBOARDING_SELF_CHECK="scripts/windows-repository-onboarding-self-check.sh"
 WINDOWS_REPOSITORY_ONBOARDING_E2E="crates/assemblywright-master/tests/windows_repository_onboarding_e2e.rs"
 WINDOWS_PROTOCOL_WORKFLOW=".github/workflows/windows-protocol.yml"
+WINDOWS_LOCAL_WORKFLOW=".github/workflows/windows-local.yml"
+WINDOWS_GUI_BUILD="scripts/build-windows-gui.ps1"
+WINDOWS_GUI_VALIDATION="scripts/validate-windows-gui.ps1"
+WINDOWS_GUI_E2E="scripts/test-windows-gui.ps1"
+MASTER_MANIFEST="crates/assemblywright-master/Cargo.toml"
 RELEASE_VERSION_SCRIPT="scripts/release-version.sh"
 NAMING_CONTRACT_SMOKE="scripts/release-naming-contract-smoke.sh"
 PROTOCOL_VERSION_CONTRACT_SMOKE="scripts/release-protocol-version-contract-smoke.sh"
@@ -320,6 +325,8 @@ for file in \
   "$WINDOWS_LOCAL_CODING_LIVE_CONTROL_SELF_CHECK" \
   "$WINDOWS_REPOSITORY_ONBOARDING" "$WINDOWS_REPOSITORY_ONBOARDING_SELF_CHECK" \
   "$WINDOWS_REPOSITORY_ONBOARDING_E2E" "$WINDOWS_PROTOCOL_WORKFLOW" \
+  "$WINDOWS_LOCAL_WORKFLOW" "$WINDOWS_GUI_BUILD" "$WINDOWS_GUI_VALIDATION" "$WINDOWS_GUI_E2E" \
+  "$MASTER_MANIFEST" \
   "$RELEASE_VERSION_SCRIPT" "$NAMING_CONTRACT_SMOKE"; do
   require_file "$file"
 done
@@ -784,7 +791,15 @@ require_text "GitHub-publication controller exact release workflow id" "$WINDOWS
   'workflow_id = 282605278'
 require_text "GitHub-publication controller exact Windows workflow id" "$WINDOWS_GITHUB_PUBLICATION_LIVE_CONTROL" \
   'workflow_id = 314849303'
-windows_workflow_sha256="$(shasum -a 256 "$WINDOWS_PROTOCOL_WORKFLOW" | awk '{print $1}')"
+# Hash canonical LF bytes so Git-for-Windows CRLF checkout conversion does not
+# change the workflow contract. Python is already a prerequisite of this gate.
+windows_workflow_sha256="$(python3 - "$WINDOWS_PROTOCOL_WORKFLOW" <<'PY'
+import hashlib
+import pathlib
+import sys
+print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes().replace(b"\r\n", b"\n")).hexdigest())
+PY
+)"
 require_text "GitHub-publication controller current Windows workflow digest" "$WINDOWS_GITHUB_PUBLICATION_LIVE_CONTROL" \
   "workflow_sha256 = \"$windows_workflow_sha256\""
 require_text "GitHub-publication adapter current Windows workflow digest" "$MASTER_GITHUB_PUBLICATION" \
@@ -1426,6 +1441,30 @@ require_text "build docs Windows GitHub authentication self-test" "$BUILD_DOCS" 
   "windows-github-publication-live-control.ps1 -Action SelfTest"
 require_text "hosted Windows GitHub authentication self-test" "$WINDOWS_PROTOCOL_WORKFLOW" \
   "windows-github-publication-live-control.ps1 -Action SelfTest"
+require_text "hosted Windows local gate name" "$WINDOWS_LOCAL_WORKFLOW" \
+  "name: Assemblywright Windows Local Gate"
+require_text "hosted Windows local fixture target" "$WINDOWS_LOCAL_WORKFLOW" \
+  "--features local-chatgpt-test-fixture --target-dir target/chatgpt-test-target"
+require_text "hosted Windows GUI real-boundary gate" "$WINDOWS_LOCAL_WORKFLOW" \
+  "./scripts/validate-windows-gui.ps1 -LiveDemo"
+require_text "hosted Windows local fixture exit propagation" "$WINDOWS_LOCAL_WORKFLOW" \
+  'if ($fixtureExit -ne 0)'
+require_text "hosted Windows local artifact retention" "$WINDOWS_LOCAL_WORKFLOW" \
+  "target/windows-gui-tests/*/gui-e2e.json"
+require_text "Windows GUI exact self-test count" "$WINDOWS_GUI_VALIDATION" \
+  'if (@($units.passed).Count -ne 14)'
+require_text "Windows GUI isolated fixture target" "$WINDOWS_GUI_E2E" \
+  "target/windows-gui-chatgpt-fixture"
+require_text "Windows GUI explicit fixture feature" "$WINDOWS_GUI_E2E" \
+  "--features local-chatgpt-test-fixture"
+require_text "Windows GUI forwarding fixture runner" "$WINDOWS_GUI_E2E" \
+  "assemblywright-local-real.exe"
+require_text "master default features remain empty" "$MASTER_MANIFEST" \
+  "default = []"
+require_text "master test fixture feature is explicit" "$MASTER_MANIFEST" \
+  "local-chatgpt-test-fixture = []"
+forbid_text "production GUI build fixture isolation" "$WINDOWS_GUI_BUILD" \
+  "local-chatgpt-test-fixture"
 require_text "safety Windows owner evidence boundary" "$SAFETY_RULES" \
   "Windows evidence admission is a separate owner action"
 require_text "knowledge base Windows owner evidence boundary" "$KB" \

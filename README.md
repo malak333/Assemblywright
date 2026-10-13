@@ -2,6 +2,31 @@
 
 > Orchestrated intelligence. Verified software.
 
+## Windows app
+
+The application and implementation pipeline run on Windows beside the local
+AI. ChatGPT/Codex supplies selectable planning and review roles. Double-click **Assemblywright.cmd** for the native Windows
+GUI, or run `./scripts/install-windows-gui.ps1` to create Desktop and Start menu
+shortcuts. The GUI provides the feature form, live logs, demo, cancellation,
+Emergency Pause, and result controls.
+The Mac-style header opens GitHub publication (branch), Permissions (half-filled
+shield), and Settings (gear). Settings select separate ChatGPT orchestrator and
+reviewer models and supported reasoning levels, alongside local implementation
+settings; Permissions enforce owner-selected edit/command approvals;
+saved GitHub connections authorize automatic feature-branch/PR publication and
+merge after required checks. The Assembly Line queues approved local features; right-side
+chat helps draft them using the selected orchestrator provider.
+Run `./scripts/windows-local-pipeline.ps1 -Demo` in
+PowerShell to have the local model implement a library and CLI, run the tests,
+repair failures, review the result, and retain a finished local candidate.
+For your own repository, use `-Job C:/work/feature.json`.
+See [Windows local pipeline](docs/windows-local-pipeline.md) for the job format,
+status, cancellation, Emergency Pause, and completion boundary. Mac control and
+distributed execution are deferred. The distributed foundation described below
+is a separate lane and is not a prerequisite for the Windows runner.
+
+## Existing Mac Developer app
+
 Assemblywright gives you a Mac app for running a queue of software features on a
 Windows machine. Describe what you want, work through the plan with ChatGPT/Codex,
 then approve it and add it to the queue. A local coding model makes the changes;

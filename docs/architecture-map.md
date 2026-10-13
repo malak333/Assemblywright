@@ -130,6 +130,48 @@ planning provider or create a GitHub repository.
 - `assemblywright-protocol` owns the path-free schema-v1 selection request,
   projection, and receipt. Protocol v5 and master schema v19 are unchanged.
 
+## Windows same-computer execution (2026-10-12)
+
+The first supported execution lane is `assemblywright-local`, built from the
+master package and launched by the native `apps/windows` WinForms GUI or
+`scripts/windows-local-pipeline.ps1`. `Assemblywright.cmd` opens the GUI;
+`scripts/install-windows-gui.ps1` installs its portable bundle and shortcuts:
+
+The GUI now also owns a local approved-feature FIFO (`assembly-line.json`),
+provider-selected text planning chat (`chat/history.json`), and persisted local
+settings/draft files. The Mac header's branch, half-filled shield, and gear
+buttons open GitHub publication, global Permissions, and role Settings.
+`assemblywright-local` enforces approval receipts and uses the frozen
+orchestrator/reviewer selections. The owner's 2026-10-13 correction selects
+ChatGPT/Codex for response-only planning and review while implementation remains
+local; each role's model/reasoning pair is independent. `assemblywright-github` owns local GitHub
+account/setup, revisioned project connections, and publication progress/receipts.
+Chat cannot execute or
+enqueue a feature. Owner Start Line drives the existing runner serially and
+advances only after its exact successful terminal evidence; this does not
+activate or replace the distributed kernel.
+
+```mermaid
+flowchart LR
+  Job["Owner job and committed repository"] --> Plan["Selected orchestrator proposes a text plan"]
+  Plan --> Candidate["Private Windows Git candidate"]
+  Candidate --> Builder["Loopback local model proposes scoped edits"]
+  Builder --> Gate["Owner-selected validation subprocess"]
+  Gate -->|failure| Builder
+  Gate -->|pass| Review["Selected ChatGPT or local reviewer checks frozen evidence"]
+  Review -->|repair| Builder
+  Review -->|approve| Finished["Local candidate commit and completed report"]
+  Finished -->|owner-connected project| Publication["Branch and PR, required checks, automatic merge"]
+```
+
+State locking, checkpoints, Ctrl+C cancellation, and local Emergency Pause
+belong to this runner. It does not depend on the distributed service or mutate
+its database, activation receipts, or device state. The committed
+source is preserved for unconnected jobs. Owner-connected projects receive an
+exact verified merge through a guarded clean fast-forward before the next
+feature. See `docs/windows-local-pipeline.md` for the accepted local
+contract and relaxed owner-process validation boundary.
+
 ## Distributed development portable foundation
 
 Current implementation:

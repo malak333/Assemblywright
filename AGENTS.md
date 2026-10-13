@@ -5,6 +5,9 @@
 - Read `DESIGN.md` and `docs/safety-rules.md` before architectural or behavior changes.
 - Windows `assemblywright-master` owns durable authority: the queue, device lifecycle, identity, policy, and audit. `assemblywright-protocol` owns the wire contracts. `assemblywright-agent` is the bounded Mac worker. `assemblywright-core` is the local transport plus release evidence only. Swift owns the macOS Developer Mode UX.
 - The pre-pivot assistant surface is removed. Do not reintroduce a conversation runtime, model routing, plugins, personal memory, a scheduler, voice, or trusted wake.
+- Owner-requested exception (2026-10-12): Windows local feature-planning chat and the Assembly Line queue are allowed under `docs/windows-local-pipeline.md`. Chat drafts have no execution, queue, repository-write, or publication authority.
+- The owner's exact Mac-controls request permits separate local orchestrator/reviewer settings, enforced global permissions, and GitHub setup/publication after an explicit owner connection. Preserve the local inference pivot and truthful publication/recovery evidence.
+- Owner-requested correction (2026-10-13): orchestrator planning/chat and final review use the owner's authenticated ChatGPT account through Codex, with separate advertised model/reasoning selections. Local inference retains implementation authority. This response-only provider exception is bounded to those two roles; preserve frozen legacy jobs, cancellation, pause, scope and truthful provider evidence.
 - Preserve fail-closed policy, planning/action separation, redaction, cancellation, emergency pause, and audit evidence.
 - Keep repository validation distinct from signing, notarization, live-device QA, and owner-recorded external evidence.
 
@@ -58,4 +61,5 @@
   are available. Playwright, visual regression, and cross-browser matrices are
   required only for an actual browser surface; native Rust, Swift, process,
   protocol, service, and live-device boundaries require native E2E instead.
+- Owner standing closeout instruction (2026-10-13): for each owner-authorized feature or phase, follow and implement the applicable documentation, add reusable conversation facts to the repository knowledge base, complete the applicable unit and E2E workflows, obtain independent review, then push the scoped PR and merge after its hosted gates pass. This authorizes publication of that approved feature's reviewed scope; unrelated dirty work remains excluded.
 - Do not commit or push unless explicitly requested. Never bypass hooks or add AI attribution unless requested.
