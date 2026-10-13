@@ -223,6 +223,89 @@ function Read-ControlText($Window, [string]$Name) {
     return $control.Current.Name
 }
 
+function ConvertTo-SafeDiagnosticText([string]$Text) {
+    if ([string]::IsNullOrWhiteSpace($Text)) { return '' }
+    $safe = ($Text -replace '[\r\n\t]+', ' ').Trim()
+    $safe = $safe -replace '(?i)https?://[^\s]+', '<endpoint>'
+    $safe = $safe -replace '(?i)\b(?:bearer|token|authorization)\s*[:=]?\s*[^\s]+', '<credential-redacted>'
+    $safe = $safe -replace '(?i)(?:[a-z]:\\|\\\\)[^\r\n]*', '<path-redacted>'
+    if ($safe.Length -gt 512) { $safe = $safe.Substring(0, 512) }
+    return $safe
+}
+
+function Get-SanitizedGuiEvidence($Gui) {
+    $snapshot = [ordered]@{
+        state = Split-Path -Leaf $Gui.State
+        process_exited = $Gui.Process.HasExited
+        queue = $null
+        report = $null
+        ui = $null
+    }
+    $line = Read-TestJson (Join-Path $Gui.State 'assembly-line.json')
+    if ($line) {
+        $snapshot.queue = @($line.entries | ForEach-Object {
+            [ordered]@{
+                status = $_.status
+                stage = $_.stage
+                attempt = $_.attempt
+                has_run_id = -not [string]::IsNullOrWhiteSpace($_.run_id)
+                publication_status = $_.publication_status
+            }
+        })
+    }
+    $report = Read-Report $Gui.State
+    if ($report) {
+        $snapshot.report = [ordered]@{
+            status = $report.status
+            stage = $report.stage
+            attempt = $report.attempt
+            has_run_id = -not [string]::IsNullOrWhiteSpace($report.run_id)
+            paused = [bool]$report.paused
+        }
+    }
+    if (-not $Gui.Process.HasExited) {
+        try {
+            $uiStatus = ConvertTo-SafeDiagnosticText (Read-ControlText $Gui.Window 'StatusLabel')
+            $snapshot.ui = [ordered]@{
+                status = $uiStatus
+                stage = ConvertTo-SafeDiagnosticText (Read-ControlText $Gui.Window 'StageLabel')
+                admission_error = $(if ($uiStatus -eq 'Needs attention') { ConvertTo-SafeDiagnosticText (Read-ControlText $Gui.Window 'OwnershipLabel') } else { '' })
+                start_line_enabled = [bool](Find-Control $Gui.Window 'StartLineButton').Current.IsEnabled
+                stop_line_enabled = [bool](Find-Control $Gui.Window 'StopLineButton').Current.IsEnabled
+            }
+        } catch {
+            $snapshot.ui = [ordered]@{ unavailable = $true }
+        }
+    }
+    return $snapshot
+}
+
+function New-SanitizedFailureRecord([System.Exception]$Exception, [string]$ScriptStackTrace) {
+    $failureSite = 'test-windows-gui.ps1'
+    if ($ScriptStackTrace -match 'test-windows-gui\.ps1: line (\d+)') { $failureSite += ':' + $Matches[1] }
+    return [ordered]@{
+        error = ConvertTo-SafeDiagnosticText $Exception.Message
+        failure_site = $failureSite
+        windows = @()
+    }
+}
+
+function Format-SanitizedFailureOutput($FailureRecord) {
+    return "Windows GUI E2E failed at $($FailureRecord.failure_site): $($FailureRecord.error)"
+}
+
+$failureRecordProbe = New-SanitizedFailureRecord `
+    (New-Object System.InvalidOperationException('Bearer owner-secret https://127.0.0.1:9999/v1 C:\owner\private-project')) `
+    'at probe, C:\owner\private-project\scripts\test-windows-gui.ps1: line 123'
+$failureRecordProbeJson = $failureRecordProbe | ConvertTo-Json -Depth 4 -Compress
+$failureOutputProbe = Format-SanitizedFailureOutput $failureRecordProbe
+if ($failureRecordProbeJson -match 'owner-secret|127\.0\.0\.1|private-project|C:\\owner' -or
+    $failureOutputProbe -match 'owner-secret|127\.0\.0\.1|private-project|C:\\owner' -or
+    $failureOutputProbe -ne 'Windows GUI E2E failed at test-windows-gui.ps1:123: <credential-redacted> <endpoint> <path-redacted>' -or
+    $failureRecordProbe.failure_site -ne 'test-windows-gui.ps1:123') {
+    throw 'The final GUI failure record or console output did not redact credentials, endpoints, and project paths while retaining its bounded failure site.'
+}
+
 function Find-Dialog($Gui, [string]$Id) {
     return Wait-Until {
         $dialogCondition = New-Object System.Windows.Automation.PropertyCondition(
@@ -307,6 +390,7 @@ function Assert-GuiCompleted($Gui) {
     }
 }
 
+$failureExit = $null
 try {
     $portFile = Join-Path $testRoot 'port.txt'
     $requestsFile = Join-Path $testRoot 'requests.jsonl'
@@ -766,14 +850,50 @@ try {
         } "The first queued feature did not become $gateCase."
         Wait-Until { (Find-Control $gateGui.Window 'StartLineButton').Current.IsEnabled } 'The stopped line did not release its controls.' | Out-Null
         $stoppedRunId = $stoppedLine.entries[0].run_id
+        $stoppedFrozenJob = $stoppedLine.entries[0].frozen_job_json
+        $pendingFrozenJob = $stoppedLine.entries[1].frozen_job_json
         Close-Gui $gateGui
         $gateRestartGui = Start-Gui $gateState ''
-        Start-Sleep -Milliseconds 1200
+        $expectedStatus = (Get-Culture).TextInfo.ToTitleCase($gateCase)
+        Wait-Until {
+            try {
+                if ((Read-ControlText $gateRestartGui.Window 'StatusLabel') -eq $expectedStatus -and
+                    (Find-Control $gateRestartGui.Window 'StartLineButton').Current.IsEnabled) { return $true }
+            } catch { }
+            return $null
+        } 'The restarted GUI did not finish restoring the stopped line before explicit Start.' | Out-Null
         $restoredLine = Read-TestJson $gateLinePath
         if ($restoredLine.entries[0].run_id -ne $stoppedRunId -or $restoredLine.entries[1].status -ne 'Pending') {
             throw 'Restart silently launched or rewrote a stopped queue.'
         }
+        if ($restoredLine.entries[0].frozen_job_json -ne $stoppedFrozenJob -or $restoredLine.entries[1].frozen_job_json -ne $pendingFrozenJob) {
+            throw 'Restart rewrote a frozen queued job before explicit Start.'
+        }
+        $safeEvidenceProbe = Get-SanitizedGuiEvidence $gateRestartGui
+        $safeEvidenceJson = $safeEvidenceProbe | ConvertTo-Json -Depth 6 -Compress
+        if ($safeEvidenceJson.Contains((Split-Path -Leaf $source)) -or $safeEvidenceJson.Contains('Implement the second feature after explicit restart.')) {
+            throw 'Sanitized GUI failure evidence exposed project or prompt content.'
+        }
         Click-Control $gateRestartGui.Window 'StartLineButton'
+        $admittedLine = Wait-Until {
+            $line = Read-TestJson $gateLinePath
+            if (-not $line) { return $null }
+            if ($line.entries[0].run_id -ne $stoppedRunId) { throw 'Explicit restart rewrote the stopped feature evidence.' }
+            if ($line.entries[0].frozen_job_json -ne $stoppedFrozenJob -or $line.entries[1].frozen_job_json -ne $pendingFrozenJob) {
+                throw 'Explicit restart rewrote a frozen queued job during admission.'
+            }
+            if ($line.entries[1].status -eq 'Failed') { throw 'The explicitly restarted pending feature failed during admission.' }
+            if ($line.entries[1].status -in @('Running', 'Completed')) { return $line }
+            try {
+                if ((Read-ControlText $gateRestartGui.Window 'StatusLabel') -eq 'Needs attention') {
+                    $admissionError = ConvertTo-SafeDiagnosticText (Read-ControlText $gateRestartGui.Window 'OwnershipLabel')
+                    throw "Explicit Start line was rejected: $admissionError"
+                }
+            } catch {
+                if ($_.Exception.Message -like 'Explicit Start line was rejected:*') { throw }
+            }
+            return $null
+        } 'Explicit Start line did not admit the remaining approved feature.' 10
         $restartedLine = Wait-Until {
             $line = Read-TestJson $gateLinePath
             if (-not $line) { return $null }
@@ -781,7 +901,17 @@ try {
             if ($line.entries[1].status -eq 'Completed') { return $line }
             return $null
         } 'Explicit Start line did not complete the remaining approved feature.'
-        $lineStopEvidence += [ordered]@{ outcome = $gateCase; stopped_run_id = $stoppedRunId; explicitly_restarted_run_id = $restartedLine.entries[1].run_id }
+        if ($restartedLine.entries[0].frozen_job_json -ne $stoppedFrozenJob -or $restartedLine.entries[1].frozen_job_json -ne $pendingFrozenJob) {
+            throw 'The completed explicit restart rewrote a frozen queued job.'
+        }
+        $lineStopEvidence += [ordered]@{
+            outcome = $gateCase
+            restored_status = $expectedStatus
+            admitted_status = $admittedLine.entries[1].status
+            frozen_jobs_stable = $true
+            stopped_run_id = $stoppedRunId
+            explicitly_restarted_run_id = $restartedLine.entries[1].run_id
+        }
         Close-Gui $gateRestartGui
     }
 
@@ -902,17 +1032,13 @@ try {
     Write-Utf8File $evidencePath ($evidence | ConvertTo-Json -Depth 6)
     Write-Host "Windows GUI E2E passed: $evidencePath"
 } catch {
-    Write-Host $_.ScriptStackTrace
-    $failureRecord = [ordered]@{ error = $_.Exception.Message; stack = $_.ScriptStackTrace; windows = @() }
-    foreach ($failureInstance in $guiInstances) {
-        if (-not $failureInstance.Process.HasExited) {
-            $failureLog = ''
-            try { $failureLog = Read-ControlText $failureInstance.Window 'LogBox' } catch { }
-            $failureRecord.windows += [ordered]@{ state = $failureInstance.State; log = $failureLog }
-        }
+    $failureRecord = New-SanitizedFailureRecord $_.Exception $_.ScriptStackTrace
+    Write-Host $failureRecord.failure_site
+    foreach ($failureInstance in @($guiInstances | Select-Object -Last 4)) {
+        $failureRecord.windows += Get-SanitizedGuiEvidence $failureInstance
     }
     Write-Utf8File (Join-Path $evidenceRoot 'failure.json') ($failureRecord | ConvertTo-Json -Depth 6)
-    throw
+    $failureExit = $failureRecord
 } finally {
     $env:ASSEMBLYWRIGHT_CHATGPT_TEST_FIXTURE = $priorChatGptFixture
     foreach ($gui in $guiInstances) {
@@ -935,4 +1061,9 @@ try {
         throw 'Refusing to remove a GUI test directory outside the intended temporary root.'
     }
     if (Test-Path -LiteralPath $resolvedTestRoot) { Remove-Item -LiteralPath $resolvedTestRoot -Recurse -Force }
+}
+
+if ($failureExit) {
+    Write-Host (Format-SanitizedFailureOutput $failureExit)
+    exit 1
 }

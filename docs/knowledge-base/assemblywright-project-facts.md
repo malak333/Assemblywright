@@ -466,6 +466,12 @@ These notes capture durable facts for future agents working on this repository.
   read or mutate the repository, sleep or spawn those children. Require explicit
   exact helper selection and an isolated candidate before effects; retain the
   parent-process tests and truthful helper-only proof boundaries.
+- Native UIA window exposure is not application initialization proof. For a
+  retained queue restart, wait for the restored terminal status and enabled
+  Start control; then prove admission of the exact pending entry separately
+  from completion. Avoid fixed startup sleeps, preserve stopped-run identity,
+  and retain bounded sanitized queue/report/UI failure state before cleanup.
+  An old empty-log timeout cannot establish a product root cause by itself.
 - Model availability can change while the cached catalog and executable remain
   the same. The later saved GPT-6.1-Sol/medium selection returned READY through
   a real response-only probe on 2026-10-13. Retain the earlier account rejection

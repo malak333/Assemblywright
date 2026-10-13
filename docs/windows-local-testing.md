@@ -128,3 +128,12 @@ and a remote-free candidate checkout before executing. A separate broad
 spawning descendants or changing repository status. These nine safe no-ops are
 fixture-selection proof, not nine additional E2E acceptance cases. The real
 parent-process scenarios continue to exercise their effectful child invocations.
+
+The GUI queue restart journey waits for restored terminal status and an enabled
+Start control, then proves admission of the exact pending entry after a single
+Start invocation. It separately checks completion at the unchanged deadline,
+preserves the first stopped run's identity, and confirms the restored queue
+does not advance before the owner acts. Bounded sanitized queue, report and UI
+state is retained if readiness, admission or completion fails. This replaces a
+fixed startup sleep and closes a diagnostic gap without adding nominal test
+counts or claiming an unproven product root cause.

@@ -1155,3 +1155,35 @@ Current successful availability does not erase an earlier account rejection or
 make cached catalog visibility sufficient inference proof. That bounded probe
 is retained under `target/publication/saved-reviewer-probe-*` and had no queue,
 repository or publication authority.
+
+### GUI restart readiness and admission evidence
+
+The `eae8804` hosted GUI run passed the seven isolated ChatGPT cases and all
+320 native captures, with 489 handles / 58 threads unchanged. Its cancellation
+restart scenario then timed out waiting for the second approved queue entry.
+The retained record identified `line cancelled state` but contained no queue,
+report or useful UI log. It cannot establish whether Start was admitted or
+which subsequent state prevented completion. The failed log and bounded
+artifact remain under `target/publication/gui-final-eae-failure.log` and
+`hosted-windows-local-eae-failure/`.
+
+The corrected journey waits for the retained terminal status and enabled Start
+control, rather than sleeping a fixed 1.2 seconds after exposing the window.
+After the single explicit Start invocation, it separately requires the second
+entry to become Running or Completed before waiting for completion. Queue and
+stopped-run identity checks remain; the completion deadline is unchanged.
+Failure evidence includes bounded, sanitized queue, report and UI state before
+fixture cleanup. This improves synchronization and diagnosis without asserting
+an unproven product cause or changing production queue behavior.
+
+The exact final Windows PowerShell full `-LiveDemo` journey passed as
+`target/windows-gui-tests/5199c09beeb1427bbd7b685285a133b4/gui-e2e.json`, SHA-256
+`4889fe24916bd79dec8cc9830b1deb11506240d3084dfd8994ea43c9b8a4d8e2`.
+Both Failed and Cancelled restarts restored the terminal state, admitted the
+second entry as Running, preserved both frozen jobs and completed with distinct
+run IDs. Its saved-settings demo also passed all twelve acceptance checks.
+PowerShell 7 passed the same functional journey as
+`44db5751b61b47d2945919185e642f74`; the final catch-output-only correction was
+parsed under both shells and exercised by the exact Windows PowerShell rerun.
+The production GUI digest remains `f6c4d697b0f8bd0932131b582e299ade1488f58bdbc47ee3a9ba50d426c9fb0d`.
+Independent high-risk review approved the final harness, evidence and docs.
