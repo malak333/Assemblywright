@@ -835,3 +835,176 @@ hosted checks/merge are pending; this paragraph is not publication completion
 evidence. The retained records are under `target/publication` in the managed
 publication checkout. The installed local lane does not change or deploy the
 distributed master service.
+
+## Hosted validation corrections and retained publication recovery: 2026-10-13
+
+The first application PR checkpoint (`95b990da37701289c5815bb49a5bd77524b1d93f`)
+exposed two hosted gaps. The macOS warnings-as-errors gate rejected a Windows-only
+process-cleanup result binding; the termination call is now retained on both
+platforms with the binding restricted to Windows. The extended Windows demo
+test used hard-coded endpoint/model defaults and happened to reach this
+workstation's live local server. That earlier extended pass did not prove
+isolated inference. The demo now takes a validated frozen snapshot of saved
+role settings, and its native test explicitly selects an ephemeral endpoint
+and verifies all twelve unchanged slugify cases.
+
+The real private-site run above stopped publication on an explicit HTTP 429
+while its required browser check succeeded. The adapter now polls routine
+checks every fifteen seconds. Only explicit read-only required-check HTTP 429
+responses retry, using a valid integer `Retry-After` or sixty-second exponential
+fallback, at most four retries across the entire check wait. Pending responses
+do not reset that allowance. The existing twenty-minute deadline and responsive
+cancel/pause checks remain enforced; effectful operations and unknown or failed
+checks are not automatically retried. New native regression scenarios cover
+successful retry, repeated/alternating throttling, non-429 failures and stop
+during backoff. Eight GitHub units and twenty-five native E2E cases passed in
+the independent parent rerun, and independent high-risk review approved.
+
+The reviewed adapter installed for recovery had SHA-256
+`69fe7f96138f4e39d9c76f613c0f8b80c45e530ec80877c1ccc4a0998283bb8c`.
+The first GUI Reconcile attempt reported an empty-output operation failure
+before a new native checkpoint. An explicit native reconciliation then resumed
+the exact retained PR and merged it; the GUI's subsequent reconciliation
+validated its durable receipt and marked the same queue entry Completed.
+Keep those interventions distinct from uninterrupted automatic completion.
+Private demo [PR #4](https://github.com/malak333/Final-Fantasy-Tactics-Demo/pull/4)
+merged as `7afd2f3f5a16694379e15c27ffbc69b898fcc285`, with completion receipt
+revision 44. The clean demo `HEAD` and `origin/main` equal that merge. Required
+PR run `38437905346` and post-merge run `38441405139` each passed all 24 unchanged
+browser groups. Recovery evidence, native stdout/stderr and actual hosted logs
+are retained under `target/publication`. A fresh run on the final installed
+bundle is required to establish automatic completion after these corrections.
+
+The corrected full native UIA journey `5f887284abdd4eb182667109ca93425f`
+passed with explicit fixture-only evidence. Demo run
+`e34fa1b8-6aa1-4684-9b4c-195d188e0998` submitted endpoint
+`http://127.0.0.1:52586/v1`, local `gui-fixture/low`, ChatGPT
+`gpt-plan/high` and `gpt-review/xhigh`, two attempts and a 47-second timeout,
+then passed the twelve unchanged slugify tests. The fixture's nondefault
+attempt/timeout settings were seeded; endpoint/model/role changes were made
+through the actual Settings controls and saved before submission. Python's
+normal unittest stderr is captured through redirected process files instead
+of being mistaken for a PowerShell terminating error. Fourteen GUI self-test
+groups passed, including a complete demo-settings round trip and invalid
+endpoint rejection. The fast-exit process regression passed 320 immediate
+children; its production helper hash matches the reviewed GUI source.
+
+The reviewed production-feature bundle at this checkpoint was installed with prior runtime
+bytes backed up and all four copied digests verified. It preserves saved roles
+and all historical queue entries. The exact GUI bytes passed the full native
+UIA journey and include the reviewed captured-process race repair:
+
+| Installed file | SHA-256 |
+| --- | --- |
+| `Assemblywright.exe` | `f6c4d697b0f8bd0932131b582e299ade1488f58bdbc47ee3a9ba50d426c9fb0d` |
+| `assemblywright-local.exe` | `df73b5aa0b24519a9213aaf3f298ccf75805e89b5be02f72fe8f675c9095242d` |
+| `assemblywright-github.exe` | `69fe7f96138f4e39d9c76f613c0f8b80c45e530ec80877c1ccc4a0998283bb8c` |
+| `windows-local-pipeline.ps1` | `5d9165a729f97e46a1fe16c14d8ceb4eb43847d3c6b9a1dd509cee2c3d10a817` |
+
+Independent high-risk review approved the demo snapshot, throttling and
+captured-process changes. The updated GUI opened as PID 12160 and a fresh
+owner-approved feature was started through its Assembly Line. Completion and
+source publication are assessed separately below; installation alone is not
+automatic-pipeline proof.
+
+Fresh run `fcad8634-bb25-4b46-8adb-b39377ba2c39` did not complete. Its first
+attempt generated a valid operator guide, but the parent-authored validator
+launcher relied on inherited Playwright resolution that the relaunched GUI
+did not have. The unchanged acceptance suite provides `FFT_PLAYWRIGHT_MODULE`;
+the corrected launcher resolves the pinned module explicitly, and its
+standalone rerun passed all 24 groups. This does not rewrite the failed native
+report. Later repair responses used a relative Windows backslash path and the
+runner rejected that representation, then exhausted its three attempts. The
+clean source remained at PR #4's merge and no new PR was created. The native
+path correction keeps exact canonical allowlist authority and rejects rooted,
+drive/UNC, traversal and duplicate aliases. The failed artifacts are retained;
+only a subsequent actual native run can establish completion.
+
+The Windows-only model-response separator correction passed thirteen local
+units and thirty-one default native pipeline cases. Nine ignored child
+validators were invoked by their parent cases. Unsafe rooted, drive, traversal
+and duplicate-alias proposals failed without effects before a relative
+backslash proposal completed through the real validator; raw response evidence
+and clean source confinement were checked. The parent independently repeated
+those suites and all seven isolated ChatGPT cases. Independent high-risk review
+approved. The installed native runner was then updated to SHA-256
+`c5c23e00a009f6cdc3a59b97a4b3dfb2b5dd957a5f873085c20af6c7aeae1a03`;
+the other three tested bundle digests above remain current. Saved settings were
+preserved, including the intervening saved reviewer selection; the retained
+feature still uses its earlier frozen role pairs.
+
+The existing Windows distributed hosted gate also exposed a recovery-test
+sampling race. Its Python fixture accepted an earlier partial attention/idle
+state and then asserted abandonment eligibility. The corrected wait requires
+the full authoritative projection and exact expected stage before asserting.
+The analogous pre-effect race reproduced locally; bounded transition/snapshot/
+log diagnostics were added. All negative assertions and the original
+sixty-second timeout remain, and no production distributed code changed.
+Four worker reruns and the independent parent rerun passed all seventeen native
+publication assertions with live GitHub credentials disabled. The retained
+failed fixture and passing logs are under `target/publication`.
+
+## Final installed automatic run and source publication: 2026-10-13
+
+After the reviewed runner update and explicit validator dependency correction,
+the retained owner-approved feature was retried and Start line selected once.
+New actual run `bccd9049-9b3b-458a-bae9-1a45a3da24a8` completed on attempt
+one with zero operator recovery actions after Start. Its frozen roles were
+ChatGPT `gpt-5.6-sol/medium`, local `qwen3.6-35b-a3b/none`, and ChatGPT
+`gpt-5.6-terra/high`. Qwen generated only `docs/windows-run-and-recovery.md`;
+the guide validator and all 24 unchanged browser groups passed, and the actual
+review response was `{"approve":true,"findings":[]}`.
+
+The application automatically published candidate
+`b61b4c9eacd19290a91eef69b3b126545eb07125` through private demo
+[PR #5](https://github.com/malak333/Final-Fantasy-Tactics-Demo/pull/5), waited
+for its required check, merged it as
+`c368438d45bf152032f1fa797fed442c55b77b38`, verified completion receipt
+revision 54, and updated the clean connected checkout. The native status is
+`succeeded/complete`, the GUI queue entry is Completed, and local `HEAD`,
+`origin/main` and the independently read remote main SHA all equal that merge.
+The owner acceptance blob remains
+`82370a62b5e579b4349eecb16e7b849575ef9df5`. Required PR run `38445311201`
+and post-merge run `38445547790` succeeded; their actual retained Linux logs
+contain all 24 browser groups. This successful new run does not erase the
+earlier interrupted publication or failed harness run.
+
+The installed GUI remains open as PID 46796. Its exact tested GUI digest is
+`f6c4d697b0f8bd0932131b582e299ade1488f58bdbc47ee3a9ba50d426c9fb0d`,
+and the default-feature native runner digest is
+`c5c23e00a009f6cdc3a59b97a4b3dfb2b5dd957a5f873085c20af6c7aeae1a03`.
+The GitHub adapter and launcher match the other current digests above. The
+actual Codex runtime digest remains
+`d13914ced6c7af174d8d638db938284231227312104b06a25e9608c632a7daec`.
+Native job, plan, implementation, gate, review and runtime artifacts remain
+under the run's state folder. Curated installed, start, durable receipt, role,
+source parity and hosted-log proof is under `target/publication`, including
+`final-live-workflow-proof.json` and `final-installed-runtime.json`.
+
+Closeout verdicts: applicable accepted docs and scoped safety rules are
+implemented; reusable Windows path, dependency, capture, throttling and recovery
+facts were added to the knowledge base. The unit workflow passed fourteen GUI
+groups, thirteen local units and eight GitHub units. Native E2E passed thirty-one
+pipeline cases, twenty-five GitHub cases, seven explicit isolated ChatGPT cases,
+the full WinForms UIA journey, the 320-child capture regression and seventeen
+distributed publication assertions. Actual authenticated three-role execution
+and automatic publication passed on the installed production bundle; candidate,
+required PR and post-merge browser suites each passed 24 groups. Independent
+high-risk reviews approved every correction. Formatting, focused clippy,
+docs/CI/Codex workflow, actionlint and whitespace checks passed.
+
+Application source publication is tracked by
+[PR #444](https://github.com/malak333/Assemblywright/pull/444). Its normal
+merge must wait for every hosted application gate on the exact final branch
+head; this native/demo completion record does not substitute for those gates.
+The managed publication checkout preserves the newer Mac code and excludes the
+original dirty checkout's unrelated certificate-rotation edits. The deployed
+Windows local lane is the verified portable bundle; the distributed master
+service was unchanged. Mac/remote live QA, signing, notarization and public
+website hosting remain separate evidence boundaries.
+
+The reviewed source corrections are committed as
+`a890e7aa208d54e69a32a35dea1735b2fe02e3ee`. This subsequent documentation-only
+closeout records the actual deployment and live proof before publishing the
+final branch head. The installed runtime inputs are unchanged from those
+reviewed source bytes.

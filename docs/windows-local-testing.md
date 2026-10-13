@@ -13,8 +13,9 @@ The generated Final Fantasy Tactics site has its own Playwright browser suite.
 | ChatGPT selections and provider boundary | Authenticated catalog parsing, unsupported model/effort rejection, bounded output, runtime identity, strict response shapes | Seven explicit-feature native cases cover planning/local implementation/review, provider rejection, stop/pause, review evidence and tool-disabled contained children |
 | Settings and right-pane chat | Catalog display/ID binding, effort defaults, stale revisions, legacy migration, history bounds and cloud history isolation | Native UIA saves/reloads independent roles; chat reply, stop, pause, active close and no execution/queue authority |
 | Queue and process supervision | FIFO persistence, malformed/recovered state, exact terminal ownership, reentrancy, cleanup, bounded shared JSON reads and real Windows transient/persistent replacement locks | Sequential features, failure/cancel/restart, stop during preflight, interrupted recovery and failed-cancel window retention |
+| Captured native responses | Windows argument quoting and stream ownership | 320 immediate real child exits cover exact stdout/stderr, newline/EOF termination, success/nonzero exit codes, missing-executable failure and handle release; production helper compiled directly |
 | Global permissions | Strict mode/revision acknowledgements and exact approval bindings | Ask approve/reject, Auto/Full edit and command behavior, stopped effects and stale approvals |
-| GitHub setup and publication | Canonical Windows paths, repository/visibility validation, exact run/candidate/connection/receipt bindings and redaction | Twenty native cases cover private creation, required-check polling/failure, cancel/pause, ambiguous merge/reconciliation, real runner candidates and two successive clean source updates |
+| GitHub setup and publication | Canonical Windows paths, repository/visibility validation, exact run/candidate/connection/receipt bindings, explicit throttling classification, bounded backoff and redaction | Native cases cover private creation, required-check polling/failure, `Retry-After`, repeated and alternating throttling, cancel/pause during backoff, ambiguous merge/reconciliation, real runner candidates and two successive clean source updates |
 | Generated website | Existing pure filter/movement assertions in the owner suite | Twenty-four Chromium/Firefox/WebKit groups cover semantic content/assets, search/filter recovery, keyboard details, movement, responsive layouts, strict paired screenshots, traces and error-free assets |
 
 The earlier installed proof retained fourteen GUI unit groups, eleven local-runner
@@ -65,3 +66,44 @@ to inflate the count. This is a scenario coverage report, not an instrumented
 line/branch percentage claim. No Rust/C# combined coverage percentage was
 measured. macOS execution, remote control, signing, notarization, clean-profile
 installation and general production readiness remain separate proof boundaries.
+
+The first hosted Windows-local run exposed a gap in the extended demo case: its
+launcher used hard-coded port 8080 and model defaults, so the earlier local
+extended pass depended on this workstation's live inference server. That case
+did not establish isolated fixture coverage. The corrected journey uses saved
+role settings and a nondefault ephemeral loopback fixture, and checks the
+submitted job plus all twelve unchanged slugify acceptance cases. Keep this
+correction separate from the earlier authenticated private-site pipeline proof.
+
+Required-check retry tests exercise real adapter processes. They honor an
+explicit `Retry-After`, succeed after a temporary throttle, stop on the fifth
+HTTP 429 even with pending responses between throttles, and cancel or pause
+without merging. Authentication/authorization/server errors still stop after
+one read. Production polls every fifteen seconds and uses sixty-second
+exponential fallback delays; the validated fixture mode alone accelerates those
+timings. The existing twenty-minute deadline bounds both waits and commands.
+
+Fast-exit response capture is a separate native cross-process regression in
+`test-windows-process-capture.ps1`, invoked by the full GUI gate. Both readers
+start before exit notification is enabled; the returned task completes after
+stream drainage and process disposal. This exercises the actual helper instead
+of mocking the race or adding another nominal GUI self-test group.
+
+The corrected current native journey is
+`5f887284abdd4eb182667109ca93425f`; its submitted demo job and twelve-test
+completion are recorded in the pipeline closeout. Current focused totals are
+fourteen GUI groups, thirteen local-runner units, eight GitHub units, thirty-one
+default-feature pipeline cases, twenty-five GitHub cases, seven isolated
+ChatGPT cases and the separate 320-child capture regression. Earlier totals
+above are historical checkpoints. The production GUI digest is
+`f6c4d697b0f8bd0932131b582e299ade1488f58bdbc47ee3a9ba50d426c9fb0d`.
+The current default pipeline suite has nine ignored child-validator helpers;
+their parent cases invoke them. The Windows model-path regression rejects
+rooted/drive/traversal/duplicate aliases without effects, then completes using a
+relative backslash representation through exact canonical allowlist checks.
+
+The existing distributed publication fixture now waits for the full projected
+abandonment readiness, including idle controls and exact attention/stage state.
+It retains every negative assertion and the original timeout. Seventeen native
+publication assertions passed in the parent rerun; the production distributed
+recovery rules remain unchanged.

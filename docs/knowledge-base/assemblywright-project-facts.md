@@ -364,6 +364,58 @@ These notes capture durable facts for future agents working on this repository.
   immediately, and a persistent lock preserves both old destination and new
   temporary bytes. Never unlink the authority file as a replacement fallback.
   The native unit test exercises a real transient/persistent Windows handle.
+- GitHub required-check polling must account for endpoint throttling even when
+  the account's primary quota remains available. The installed PR #4 run reached
+  HTTP 429 while its browser check passed; preserve that attention record and
+  reconcile the exact retained PR instead of creating another publication.
+  Routine checks use a fifteen-second interval. Explicit read-only HTTP 429
+  responses honor a valid integer `Retry-After` or bounded exponential backoff;
+  the four-retry allowance belongs to the entire check wait, including pending
+  responses between throttles. Cancellation and the existing deadline still
+  apply. Effectful publication commands are never retried by this policy.
+- Hosted Windows tests must configure an ephemeral local inference endpoint.
+  A demo test that silently depends on the workstation's port 8080 can pass
+  locally while failing on a clean CI runner. The GUI demo must freeze the same
+  saved implementation, ChatGPT planning and review settings as normal features;
+  assert those submitted values and execute the unchanged demo acceptance tests.
+- Platform-specific process cleanup results need platform-specific bindings.
+  Retain the termination call on every platform while binding its Windows-only
+  fallback result under `cfg(windows)`; the macOS warnings-as-errors gate catches
+  an otherwise unused binding.
+- Enable captured-child exit notification only after both asynchronous readers
+  have started. Otherwise a fast child can signal exit before capture is ready,
+  leaving a successful native response empty at the GUI boundary. Drain both
+  readers and dispose the process before completing its result. The durable
+  Windows regression compiles the production helper and checks 320 immediate
+  exits, exact stdout/stderr and exit codes, missing-executable failure and
+  released handles. It runs in the full GUI gate and retains bounded evidence.
+- A clean private candidate does not inherit ignored `node_modules` or a GUI
+  launcher's previous environment. Browser validation must locate its pinned
+  dependency explicitly through the acceptance suite's supported module setting
+  or install it through the approved validation command. Preserve a failed run
+  caused by a harness dependency omission; a successful corrected standalone
+  validator is not retroactive native completion evidence.
+- Local models may return relative edit paths with Windows backslashes. Treat
+  Windows separators as representation before exact canonical allowlist checks,
+  while rejecting traversal, roots, drive/UNC paths and duplicate aliases. Keep
+  owner job paths canonical and retain the original response as evidence. Do
+  not broaden the approved file scope to accommodate path formatting.
+- A recovery projection can become ready after its earlier attention/idle
+  transition. The distributed publication fixture must wait for the exact
+  authoritative `can_abandon_publication` projection, expected stage, failed
+  feature, attention status/checkpoint and idle controls before exercising the
+  action. Preserve stale, drifted, open/merged/missing-PR and no-effect rejection
+  assertions and the existing timeout. Bounded transition/snapshot/log
+  diagnostics distinguish a sampling race from an invalid durable binding.
+- The corrected installed Windows lane completed actual run
+  `bccd9049-9b3b-458a-bae9-1a45a3da24a8` on attempt one after Start with no
+  operator recovery: ChatGPT Sol/medium planned, local Qwen/none generated the
+  scoped guide, unchanged browser validation passed, and ChatGPT Terra/high
+  approved. The app created and merged private demo PR #5, verified receipt
+  revision 54 and updated the clean checkout to `c368438d45bf152032f1fa797fed442c55b77b38`.
+  Keep that successful new run distinct from PR #4's explicit reconciliation
+  and the retained failed dependency/path run. Exact runtime, source and hosted
+  test proof is recorded in the Windows local-pipeline closeout.
 - The GUI-only C# ChatGPT fixture forwards non-ChatGPT commands to
   `assemblywright-local-real.exe`. That copy is used even though its filename
   appears only inside the fixture source. Trace fixture forwarding before
