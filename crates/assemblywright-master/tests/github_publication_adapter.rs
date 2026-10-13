@@ -33,7 +33,7 @@ fn publication_deadline_covers_pinned_workflow_budgets_with_queue_margin() {
 
     assert_eq!(
         GITHUB_PUBLICATION_ACTION_DEADLINE,
-        Duration::from_secs(100 * 60),
+        Duration::from_secs(110 * 60),
         "the publication action deadline must remain explicitly bounded"
     );
     assert!(
@@ -61,13 +61,14 @@ fn workflow_timeout(repository: &Path, relative_path: &str) -> Duration {
                 })
         })
         .collect::<Vec<_>>();
-    assert_eq!(
-        configured.len(),
-        1,
-        "{} must define exactly one job timeout-minutes budget",
+    assert!(
+        !configured.is_empty(),
+        "{} must define a job timeout-minutes budget",
         path.display()
     );
-    Duration::from_secs(configured[0] * 60)
+    // The release selector and Mac runner are dependent jobs. Summing all
+    // configured jobs conservatively bounds that path and future dependencies.
+    Duration::from_secs(configured.into_iter().sum::<u64>() * 60)
 }
 
 #[test]
@@ -224,6 +225,15 @@ fn required_checks_parser_pins_github_app_and_uses_latest_run() {
         validate_github_required_checks_observation(&exact, &workflows, commit).unwrap(),
         [0; 32]
     );
+    for conclusion in ["skipped", "neutral", "cancelled"] {
+        let mut incomplete_release = exact.clone();
+        incomplete_release["check_runs"][0]["conclusion"] = json!(conclusion);
+        assert_eq!(
+            validate_github_required_checks_observation(&incomplete_release, &workflows, commit),
+            Err(PublicationAdapterError::MissingEvidence),
+            "a {conclusion} release job cannot become full release-publication evidence"
+        );
+    }
 
     let duplicate = json!({
         "check_runs": [
@@ -253,7 +263,7 @@ fn required_checks_parser_pins_github_app_and_uses_latest_run() {
     assert_eq!(
         validate_github_workflow_content(
             ".github/workflows/release-local.yml",
-            "51e809a94f59193e213bdff6e49f3a86e612643f094e366055f42f8745026fd7",
+            "6c2e8710ec2cae10287dbed0d1f7343059d1630a7ca8749191c0d77dc7e083a4",
             &trusted_release,
         ),
         Ok(())
@@ -263,7 +273,7 @@ fn required_checks_parser_pins_github_app_and_uses_latest_run() {
     assert_eq!(
         validate_github_workflow_content(
             ".github/workflows/release-local.yml",
-            "51e809a94f59193e213bdff6e49f3a86e612643f094e366055f42f8745026fd7",
+            "6c2e8710ec2cae10287dbed0d1f7343059d1630a7ca8749191c0d77dc7e083a4",
             &replaced,
         ),
         Err(PublicationAdapterError::MissingEvidence)
@@ -454,7 +464,7 @@ fn valid_config(gh: &[u8], git: &[u8]) -> serde_json::Value {
         "merge_strategy": "merge",
         "post_merge_gate": "release-local",
         "required_checks": [
-            {"id":"release-local","workflow":"Assemblywright Release Local Gate","context":"Release local gate","app_id":15368,"workflow_id":282605278,"workflow_path":".github/workflows/release-local.yml","workflow_sha256":"51e809a94f59193e213bdff6e49f3a86e612643f094e366055f42f8745026fd7"},
+            {"id":"release-local","workflow":"Assemblywright Release Local Gate","context":"Release local gate","app_id":15368,"workflow_id":282605278,"workflow_path":".github/workflows/release-local.yml","workflow_sha256":"6c2e8710ec2cae10287dbed0d1f7343059d1630a7ca8749191c0d77dc7e083a4"},
             {"id":"protocol-windows","workflow":"Assemblywright Windows Distributed Gate","context":"Protocol, master, identity, mTLS, and SCM","app_id":15368,"workflow_id":314849303,"workflow_path":".github/workflows/windows-protocol.yml","workflow_sha256":"a865984156057ad6c0443d29008a1feeaf37796cb06429b0e9e68f7ecb12e7c6"}
         ],
         "gh_executable_sha256": hex(&Sha256::digest(gh)),

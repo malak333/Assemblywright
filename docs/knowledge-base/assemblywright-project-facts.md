@@ -435,8 +435,9 @@ These notes capture durable facts for future agents working on this repository.
 - A hosted workflow's outer time budget must fit inside the publication
   controller's per-action deadline, including scheduling and final read margin.
   Check all pinned gates rather than only the workflow just changed. The
-  distributed action now allows one hundred minutes for the existing
-  ninety-minute Mac gate and sixty-minute Windows gate; cancellation, expired
+  distributed action now allows one hundred ten minutes for the dependent
+  five-minute selector and ninety-minute Mac gate, plus ten minutes of margin,
+  while also covering the sixty-minute Windows gate; cancellation, expired
   deadline and lost-authority checks still fail closed. A regression reads the
   actual pinned workflow budgets so future increases cannot silently outrun it.
 - Run the distributed publication proof controller with Windows PowerShell 5.1.
@@ -691,6 +692,14 @@ These notes capture durable facts for future agents working on this repository.
 - The owner prioritized a complete same-computer Windows pipeline. Mac control
   and distributed execution are deferred. `docs/windows-local-pipeline.md`
   overrides the earlier two-machine designs within the local lane's scope.
+- The owner requested Windows-specific CI for Windows-only push/merge phases.
+  Apply the `windows-only` PR label and retain exact `[windows-only]` in the
+  merge/main message. All three Windows workflows stay enabled; a Windows scope
+  selector skips only the Mac runner. Other scopes, label removal, explicit
+  dispatch and unknown/malformed event data retain full CI. Unrelated labels
+  must use an alternate check context so a newer skipped run cannot shadow
+  earlier full-release evidence. Skipped checks never establish full release
+  proof. See [Windows CI scope](../windows-ci-scope.md).
 - A PowerShell child script's `exit 1` does not automatically stop its caller.
   A subsequent native command can overwrite `$LASTEXITCODE` and create a false
   green gate. Check the exit immediately, require fresh completion evidence

@@ -1063,11 +1063,14 @@ the updated workflow's canonical LF SHA-256
 The deployed distributed service and its configuration were not modified.
 Independent review also caught the distributed publication controller's former
 forty-five-minute action deadline, which could expire before a valid longer
-hosted gate. Its source deadline now covers one hundred minutes: the longest
+hosted gate. At that checkpoint its source deadline covered one hundred minutes:
+the longest
 pinned gate is the existing ninety-minute Mac release job, plus ten minutes for
 scheduling and final reads. Each publication action gets a fresh control. The
 configured-workflow budget regression, cancellation, lost-authority and expired
 deadline tests protect the relationship without disabling a failure check.
+The Windows-scoped CI selector added below extends the dependent workflow
+budget; the current bounded action deadline is one hundred ten minutes.
 
 ### Captured-process regression measurement on a clean hosted runner
 
@@ -1351,3 +1354,37 @@ fourteen unit groups; the final proof is
 `d77623f23facafcef3b9db1d7b3f735fb17b017777f381b55a78986040cfebc5`.
 The native runner, GitHub adapter and model/review/publication authority are
 unchanged by this production GUI correction.
+
+### Windows-scoped GitHub CI
+
+The owner requested tagging Windows-only pushes and merges so only Windows
+execution runs. The `windows-only` PR label and exact `[windows-only]`
+merge/main commit marker select this mode. A short Windows selector job skips
+the Mac runner; production Windows, Windows-local GUI/native and Windows
+distributed workflows remain mandatory. Manual full dispatch, label removal,
+untagged or malformed/unknown event data retain full validation. The operational
+commands and proof limits are in [Windows CI scope](windows-ci-scope.md).
+
+Eighteen actual-handler event cases passed in both Windows PowerShell 5.1 and
+PowerShell 7.6. The workflow contract binds dynamic check naming, selector
+outputs, Windows execution, shared cancellation and unrelated-event isolation.
+An unrelated label uses a distinct ignored check name so it cannot shadow
+earlier full-release evidence with a higher skipped check ID. Applying the
+Windows label intentionally skips the protected Mac context; that skip is not
+full-release evidence. The existing protected publication parser still rejects
+skipped, neutral and cancelled conclusions even when the workflow run itself
+reports success.
+
+The release selector workflow's canonical LF SHA-256 is
+`6c2e8710ec2cae10287dbed0d1f7343059d1630a7ca8749191c0d77dc7e083a4`.
+All five source/controller/test pins are updated consistently. Its separate
+five-minute selector precedes the Mac runner's ninety-minute budget. The
+deadline regression conservatively sums configured job budgets, covering this
+ninety-five-minute dependency path plus ten minutes for queue/final reads.
+The publication action remains explicitly bounded at one hundred ten minutes;
+its cancellation and fresh-authority checks are unchanged.
+All six publication-adapter tests passed, including exact workflow bytes and
+the skipped-check rejection. Proof is
+`target/publication/windows-ci-scope-publication-adapter-final.log` and
+`release-local-selector-{ps5,ps7}.{log,json}`. No Mac application code or protected
+Windows service/configuration is changed by this CI routing slice.

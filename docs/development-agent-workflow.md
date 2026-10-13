@@ -130,6 +130,11 @@ separate evidence, not Windows acceptance.
    after the checks pass, then verify the reviewed commit is contained in
    `origin/main` and local `HEAD` equals the published main SHA. A local pass,
    successful push, or merge while checks are pending is not closeout.
+   For Windows-only phases, apply the `windows-only` PR label and preserve
+   `[windows-only]` in the merge/main commit message. Verify the scope selector
+   succeeds, the Mac runner job is skipped, and all Windows gates pass. Other
+   scopes keep full CI; removing the label or explicit workflow dispatch restores
+   the Mac gate. Never record a skipped Mac job as full release evidence.
    If deployment or live proof happens after the implementation commit, record
    that evidence in a docs-only closeout commit, run the required hosted gates
    for that exact final SHA, and restore authoritative-host source parity. Do

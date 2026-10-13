@@ -2,6 +2,12 @@ name: Assemblywright Release Local Gate
 
 on:
   pull_request:
+    types:
+      - opened
+      - reopened
+      - synchronize
+      - labeled
+      - unlabeled
   push:
     branches:
       - main
@@ -10,15 +16,46 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: assemblywright-release-local-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
-
 jobs:
+  select-release-local:
+    name: Select release-local gate
+    runs-on: windows-latest
+    timeout-minutes: 5
+    concurrency:
+      group: assemblywright-release-local-${{ github.workflow }}-${{ github.ref }}-${{ github.event_name == 'pull_request' && github.event.label.name && github.event.label.name != 'windows-only' && github.run_id || 'gate' }}
+      cancel-in-progress: true
+    outputs:
+      run_mac: ${{ steps.select.outputs.run_mac }}
+      check_name: ${{ steps.select.outputs.check_name }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+
+      - name: Select Mac release-local gate
+        id: select
+        shell: powershell
+        run: |
+          $selection = & ./scripts/select-release-local.ps1 `
+            -EventName $env:GITHUB_EVENT_NAME `
+            -EventPath $env:GITHUB_EVENT_PATH `
+            -Ref $env:GITHUB_REF | ConvertFrom-Json -ErrorAction Stop
+          "run_mac=$($selection.run_mac.ToString().ToLowerInvariant())" |
+            Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "check_name=$($selection.check_name)" |
+            Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "decision=$($selection.decision)"
+          "reason=$($selection.reason)"
+
   release-local:
-    name: Release local gate
+    name: ${{ needs.select-release-local.outputs.check_name }}
+    needs: select-release-local
+    if: needs.select-release-local.outputs.run_mac == 'true'
     runs-on: macos-15
     timeout-minutes: 90
+    concurrency:
+      group: assemblywright-release-local-${{ github.workflow }}-${{ github.ref }}-gate
+      cancel-in-progress: true
 
     steps:
       - name: Check out repository

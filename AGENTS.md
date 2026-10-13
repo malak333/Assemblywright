@@ -64,3 +64,4 @@
   protocol, service, and live-device boundaries require native E2E instead.
 - Owner standing closeout instruction (2026-10-13): for each owner-authorized feature or phase, follow and implement the applicable documentation, add reusable conversation facts to the repository knowledge base, complete the applicable unit and E2E workflows, obtain independent review, then push the scoped PR and merge after its hosted gates pass. This authorizes publication of that approved feature's reviewed scope; unrelated dirty work remains excluded.
 - Do not commit or push unless explicitly requested. Never bypass hooks or add AI attribution unless requested.
+- For an owner-scoped Windows-only phase, apply the `windows-only` PR label and preserve `[windows-only]` in the merge/main commit message. Run all Windows gates; other scopes and explicit full workflow dispatch retain full CI. A skipped Mac job is not full release evidence.

@@ -38,6 +38,9 @@ activation refer to the explicit `protected-service` mode.
 The separate `production-build.yml` workflow compiles the supervised production
 runner with `cargo build --release -p assemblywright-master --bin assemblywright-developer --locked`.
 That hosted compilation is separate from installed Windows deployment.
+For Windows-only phases, use the `windows-only` PR label and `[windows-only]`
+merge/main commit marker described in [Windows CI scope](windows-ci-scope.md).
+Run `./scripts/test-release-local-selector.ps1` for the native selector matrix.
 
 ## Developer chat history restoration
 
@@ -1443,9 +1446,9 @@ was stopped by the former thirty-five-minute job limit while later master tests
 were passing. Individual fixture deadlines and every test command remain in
 place; the outer budget permits the complete master, broker, executor and SCM
 suite to finish.
-The distributed publication action has a hundred-minute outer deadline,
-covering the longest pinned gate (the existing ninety-minute Mac release gate)
-plus ten minutes for scheduling and final reads. Each action receives a fresh
+The distributed publication action has an outer deadline of 110 minutes,
+covering the five-minute selector followed by the ninety-minute Mac release
+gate plus ten minutes for scheduling and final reads. Each action receives a fresh
 control; current authority, cancellation and per-command checks remain active.
 
 Use the workflow's package-scoped protocol, master, broker, and executor clippy commands on
