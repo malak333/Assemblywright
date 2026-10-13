@@ -216,6 +216,16 @@ namespace Assemblywright.Windows
                 JobDocument roleRoundTrip = JobJson.DeserializeJob(JobJson.Serialize(roleJob));
                 Require(roleRoundTrip.model == "implementation-model" && roleRoundTrip.orchestrator_provider == RoleProvider.ChatGpt && roleRoundTrip.orchestrator_model == "orchestrator-model" && roleRoundTrip.orchestrator_reasoning_effort == "xhigh"
                     && roleRoundTrip.reviewer_provider == RoleProvider.ChatGpt && roleRoundTrip.reviewer_model == "reviewer-model" && roleRoundTrip.reviewer_reasoning_effort == "high", "role snapshot changed during job round trip");
+                roleSettings.endpoint = "http://127.0.0.1:49173/v1"; roleSettings.default_attempts = 4; roleSettings.timeout_seconds = 47;
+                JobDocument demoSnapshot = DemoJobSettings.CreateSnapshot(roleSettings, Path.GetTempPath(), typeof(Program).Assembly.Location);
+                JobDocument demoRoundTrip = JobJson.DeserializeJob(JobJson.Serialize(demoSnapshot));
+                Require(demoRoundTrip.endpoint == roleSettings.endpoint && demoRoundTrip.model == "implementation-model" && demoRoundTrip.reasoning_effort == "high"
+                    && demoRoundTrip.orchestrator_provider == RoleProvider.ChatGpt && demoRoundTrip.orchestrator_model == "orchestrator-model" && demoRoundTrip.orchestrator_reasoning_effort == "xhigh"
+                    && demoRoundTrip.reviewer_provider == RoleProvider.ChatGpt && demoRoundTrip.reviewer_model == "reviewer-model" && demoRoundTrip.reviewer_reasoning_effort == "high"
+                    && demoRoundTrip.max_attempts == 4 && demoRoundTrip.validation.timeout_seconds == 47, "demo settings snapshot did not freeze every saved role and execution setting");
+                GuiSettings invalidDemoSettings = new GuiSettings(); invalidDemoSettings.endpoint = "http://example.com/v1";
+                bool invalidDemoRejected = false; try { DemoJobSettings.CreateSnapshot(invalidDemoSettings, Path.GetTempPath(), typeof(Program).Assembly.Location); } catch (InvalidDataException) { invalidDemoRejected = true; }
+                Require(invalidDemoRejected, "demo settings snapshot accepted invalid saved settings");
                 JobDocument legacyRoleJob = ValidJob(); legacyRoleJob.model = "legacy-model"; legacyRoleJob.reviewer_model = null;
                 JobDocument legacyRoundTrip = JobJson.DeserializeJob(JobJson.Serialize(legacyRoleJob));
                 Require(legacyRoundTrip.orchestrator_provider == null && legacyRoundTrip.reviewer_provider == null && RoleSettings.ReviewerModelForJob(legacyRoleJob, roleSettings) == "legacy-model", "legacy job provider semantics or reviewer fallback changed");

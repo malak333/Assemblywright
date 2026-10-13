@@ -38,9 +38,16 @@ def main():
                 content = {"approve": True, "findings": []}
                 reply = json.dumps(content)
             elif "coding worker" in system:
-                content = {
-                    "edits": [{"path": "feature.py", "content": "def answer():\n    return 42\n"}]
-                }
+                prompt = request["messages"][-1]["content"]
+                if "src/slugify.py" in prompt and "src/cli.py" in prompt:
+                    content = {"edits": [
+                        {"path": "src/slugify.py", "content": "import re\nimport unicodedata\n\n\ndef slugify(text, max_length=80):\n    if not isinstance(text, str):\n        raise TypeError(\"text must be a string\")\n    if isinstance(max_length, bool) or not isinstance(max_length, int) or max_length <= 0:\n        raise ValueError(\"max_length must be a positive integer\")\n    normalized = unicodedata.normalize(\"NFKD\", text).encode(\"ascii\", \"ignore\").decode(\"ascii\").lower()\n    value = re.sub(r\"[^a-z0-9]+\", \"-\", normalized).strip(\"-\")\n    return value[:max_length].rstrip(\"-\")\n"},
+                        {"path": "src/cli.py", "content": "import argparse\n\nfrom slugify import slugify\n\n\ndef positive_integer(value):\n    try:\n        number = int(value)\n    except ValueError:\n        raise argparse.ArgumentTypeError(\"must be a positive integer\")\n    if number <= 0:\n        raise argparse.ArgumentTypeError(\"must be a positive integer\")\n    return number\n\n\nparser = argparse.ArgumentParser()\nparser.add_argument(\"text\")\nparser.add_argument(\"--max-length\", type=positive_integer, default=80)\narguments = parser.parse_args()\nprint(slugify(arguments.text, arguments.max_length))\n"},
+                    ]}
+                else:
+                    content = {
+                        "edits": [{"path": "feature.py", "content": "def answer():\n    return 42\n"}]
+                    }
                 reply = json.dumps(content)
             else:
                 if "__WAIT_FOR_CANCEL__" in request["messages"][-1]["content"]:

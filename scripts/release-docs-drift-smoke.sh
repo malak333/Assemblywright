@@ -1453,6 +1453,10 @@ require_text "hosted Windows local artifact retention" "$WINDOWS_LOCAL_WORKFLOW"
   "target/windows-gui-tests/*/gui-e2e.json"
 require_text "Windows GUI exact self-test count" "$WINDOWS_GUI_VALIDATION" \
   'if (@($units.passed).Count -ne 14)'
+require_text "Windows GUI captured-process regression" "$WINDOWS_GUI_VALIDATION" \
+  "test-windows-process-capture.ps1"
+require_text "hosted Windows captured-process evidence" "$WINDOWS_LOCAL_WORKFLOW" \
+  "target/windows-ci/windows-process-capture.json"
 require_text "Windows GUI isolated fixture target" "$WINDOWS_GUI_E2E" \
   "target/windows-gui-chatgpt-fixture"
 require_text "Windows GUI explicit fixture feature" "$WINDOWS_GUI_E2E" \

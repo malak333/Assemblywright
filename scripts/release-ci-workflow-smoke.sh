@@ -110,6 +110,8 @@ require_text "cargo test -p assemblywright-master --features local-chatgpt-test-
 require_text '& ./scripts/validate-windows-gui.ps1 -LiveDemo' "$WINDOWS_LOCAL_WORKFLOW"
 require_text "uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02" "$WINDOWS_LOCAL_WORKFLOW"
 require_text "target/windows-gui/gui-unit-tests.json" "$WINDOWS_LOCAL_WORKFLOW"
+require_text "target/windows-ci/windows-process-capture.json" "$WINDOWS_LOCAL_WORKFLOW"
+require_text "test-windows-process-capture.ps1" "$WINDOWS_GUI_VALIDATION"
 require_text "target/windows-gui-tests/*/gui-e2e.json" "$WINDOWS_LOCAL_WORKFLOW"
 require_text 'if (@($units.passed).Count -ne 14)' "$WINDOWS_GUI_VALIDATION"
 require_text "--features local-chatgpt-test-fixture" "$WINDOWS_GUI_E2E"

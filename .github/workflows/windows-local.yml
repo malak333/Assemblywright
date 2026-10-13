@@ -56,6 +56,7 @@ jobs:
           retention-days: 14
           path: |
             target/windows-ci/chatgpt-fixture-e2e.log
+            target/windows-ci/windows-process-capture.json
             target/windows-gui/gui-unit-tests.json
             target/windows-gui-tests/*/gui-e2e.json
             target/windows-gui-tests/*/failure.json

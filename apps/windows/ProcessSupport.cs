@@ -165,8 +165,9 @@ namespace Assemblywright.Windows
             StringBuilder output = new StringBuilder();
             StringBuilder error = new StringBuilder();
             Process process = new Process();
+            bool started = false;
+            TaskCompletionSource<bool> exited = new TaskCompletionSource<bool>();
             process.StartInfo = NewStartInfo(executable, arguments);
-            process.EnableRaisingEvents = true;
             process.OutputDataReceived += delegate(object sender, DataReceivedEventArgs eventArgs)
             {
                 if (eventArgs.Data != null) lock (output) output.AppendLine(eventArgs.Data);
@@ -175,36 +176,57 @@ namespace Assemblywright.Windows
             {
                 if (eventArgs.Data != null) lock (error) error.AppendLine(eventArgs.Data);
             };
-            process.Exited += delegate
+            process.Exited += delegate { exited.TrySetResult(true); };
+            exited.Task.ContinueWith(delegate(Task<bool> signal)
             {
+                if (signal.Status != TaskStatus.RanToCompletion) return;
+                ProcessResult result = null;
+                Exception failure = null;
                 try
                 {
                     process.WaitForExit();
-                    ProcessResult result = new ProcessResult();
+                    result = new ProcessResult();
                     result.ExitCode = process.ExitCode;
                     lock (output) result.StandardOutput = output.ToString();
                     lock (error) result.StandardError = error.ToString();
-                    completion.TrySetResult(result);
                 }
                 catch (Exception exception)
                 {
-                    completion.TrySetException(exception);
+                    failure = exception;
                 }
-                finally
+                try
                 {
                     process.Dispose();
                 }
-            };
+                catch (Exception exception)
+                {
+                    if (failure == null) failure = exception;
+                }
+                if (failure == null) completion.TrySetResult(result);
+                else completion.TrySetException(failure);
+            }, TaskScheduler.Default);
             try
             {
                 if (!process.Start()) throw new InvalidOperationException("Windows did not start " + executable + ".");
+                started = true;
                 process.BeginOutputReadLine();
                 process.BeginErrorReadLine();
+                process.EnableRaisingEvents = true;
             }
             catch (Exception exception)
             {
-                TryTerminateAndDispose(process, 5000);
-                completion.TrySetException(exception);
+                exited.TrySetCanceled();
+                Exception reported = exception;
+                if (!started)
+                {
+                    process.Dispose();
+                }
+                else if (!TryTerminateAndDispose(process, 5000))
+                {
+                    reported = new ProcessLaunchException("The child process started, but stream setup failed and its exit could not be confirmed.", exception, process);
+                }
+                completion.TrySetException(reported);
+                return completion.Task;
             }
             return completion.Task;
         }

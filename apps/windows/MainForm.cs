@@ -705,7 +705,11 @@ namespace Assemblywright.Windows
                 if (!PrelaunchAuthority.MayLaunch(queueStopRequested, closeRequested)) return;
                 if (latestReport != null && latestReport.status == "running") { SurfaceError("Another local pipeline is active."); return; }
                 if (latestReport != null && latestReport.paused) { SurfaceError("Local Emergency Pause is active. Resume before starting the demo."); return; }
-                await StartOwnedProcessAsync("powershell.exe", new string[] { "-NoProfile", "-File", demoScriptPath, "-Demo", "-NoBuild", "-RunnerPath", runnerPath, "-StateDir", stateDirectory });
+                JobDocument demoSettings = DemoJobSettings.CreateSnapshot(settings, AppDomain.CurrentDomain.BaseDirectory, demoScriptPath);
+                string frozenSettings = Path.Combine(stateDirectory, "jobs", DateTime.UtcNow.ToString("yyyyMMddTHHmmssfffZ") + "-demo-settings-" + Guid.NewGuid().ToString("N") + ".json");
+                JobJson.WriteUtf8(frozenSettings, JobJson.Serialize(demoSettings));
+                AppendLog("Frozen demo settings: " + frozenSettings + Environment.NewLine);
+                await StartOwnedProcessAsync("powershell.exe", new string[] { "-NoProfile", "-File", demoScriptPath, "-Demo", "-DemoSettingsJob", frozenSettings, "-NoBuild", "-RunnerPath", runnerPath, "-StateDir", stateDirectory });
             }
             finally { EndStartOperation(); }
         }

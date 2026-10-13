@@ -1249,20 +1249,35 @@ async fn run_owned(job_path: PathBuf, state: PathBuf) -> Result<()> {
                 continue;
             }
         };
-        if matches!(edits_would_change(&candidate, &allowed, &edits), Ok(false)) {
-            let prior_failure = feedback.chars().take(6_000).collect::<String>();
-            feedback = format!(
-                "The concrete prior failure still applies:\n{prior_failure}\n\nThe proposed repair made no byte-level changes to the candidate. Do not repeat unchanged failing code. Diagnose the concrete failure above and return only the necessary full-file edits that actually change the candidate."
-            );
-            checkpoint(
-                &state,
-                &run_dir,
-                &mut report,
-                "implementation",
-                "retry",
-                &feedback,
-            )?;
-            continue;
+        match edits_would_change(&candidate, &allowed, &edits) {
+            Ok(true) => {}
+            Ok(false) => {
+                let prior_failure = feedback.chars().take(6_000).collect::<String>();
+                feedback = format!(
+                    "The concrete prior failure still applies:\n{prior_failure}\n\nThe proposed repair made no byte-level changes to the candidate. Do not repeat unchanged failing code. Diagnose the concrete failure above and return only the necessary full-file edits that actually change the candidate."
+                );
+                checkpoint(
+                    &state,
+                    &run_dir,
+                    &mut report,
+                    "implementation",
+                    "retry",
+                    &feedback,
+                )?;
+                continue;
+            }
+            Err(error) => {
+                feedback = format!("Rejected edits: {error:#}");
+                checkpoint(
+                    &state,
+                    &run_dir,
+                    &mut report,
+                    "implementation",
+                    "retry",
+                    &bounded(&feedback),
+                )?;
+                continue;
+            }
         }
         let mut edit_permit = None;
         if permissions.mode == PermissionMode::Ask {
@@ -2034,6 +2049,12 @@ fn normalize_allowlist(items: &[String]) -> Result<BTreeSet<PathBuf>> {
         if item.is_empty() || path.is_absolute() || item.contains(':') || item.contains('\\') {
             bail!("allowlisted path must be nonempty and relative: {item}")
         }
+        if item
+            .split('/')
+            .any(|component| component.is_empty() || component == "." || component == "..")
+        {
+            bail!("allowlisted path is not normalized: {item}")
+        }
         let mut clean = PathBuf::new();
         for component in path.components() {
             match component {
@@ -2057,6 +2078,19 @@ fn normalize_allowlist(items: &[String]) -> Result<BTreeSet<PathBuf>> {
         }
     }
     Ok(out)
+}
+
+fn normalize_model_edit_path(item: &str) -> Result<PathBuf> {
+    #[cfg(windows)]
+    let canonical = item.replace('\\', "/");
+    #[cfg(not(windows))]
+    let canonical = item.to_owned();
+
+    normalize_allowlist(&[canonical])
+        .with_context(|| format!("invalid model edit path: {item}"))?
+        .into_iter()
+        .next()
+        .ok_or_else(|| anyhow!("invalid model edit path: {item}"))
 }
 
 fn require_clean(repo: &Repository) -> Result<()> {
@@ -2816,10 +2850,7 @@ fn apply_edits(root: &Path, allowed: &BTreeSet<PathBuf>, edits: Vec<Edit>) -> Re
     let mut seen = BTreeSet::new();
     let mut validated = Vec::with_capacity(edits.len());
     for edit in edits {
-        let normalized = normalize_allowlist(std::slice::from_ref(&edit.path))?
-            .into_iter()
-            .next()
-            .unwrap();
+        let normalized = normalize_model_edit_path(&edit.path)?;
         if !allowed.contains(&normalized) {
             bail!("path is outside allowed_files: {}", edit.path)
         }
@@ -2845,10 +2876,7 @@ fn edits_would_change(root: &Path, allowed: &BTreeSet<PathBuf>, edits: &[Edit]) 
     let mut seen = BTreeSet::new();
     let mut changed = false;
     for edit in edits {
-        let normalized = normalize_allowlist(std::slice::from_ref(&edit.path))?
-            .into_iter()
-            .next()
-            .unwrap();
+        let normalized = normalize_model_edit_path(&edit.path)?;
         if !allowed.contains(&normalized) {
             bail!("path is outside allowed_files: {}", edit.path)
         }
@@ -3191,7 +3219,10 @@ async fn read_bounded<T: tokio::io::AsyncRead + Unpin>(stream: Option<T>) -> Str
 }
 
 async fn terminate_tree(child: &mut Child, job: &ValidatorJob) {
+    #[cfg(windows)]
     let job_terminated = job.terminate().is_ok();
+    #[cfg(not(windows))]
+    let _ = job.terminate();
     #[cfg(windows)]
     if !job_terminated {
         if let Some(pid) = child.id() {
@@ -3412,13 +3443,92 @@ mod tests {
 
     #[test]
     fn allowlist_rejects_metadata_and_non_relative_scope() {
-        for path in [".git/config", ".GIT/HEAD", "../outside", "C:/absolute"] {
+        for path in [
+            ".git/config",
+            ".GIT/HEAD",
+            "../outside",
+            "C:/absolute",
+            "src//lib.rs",
+            "src/./lib.rs",
+        ] {
             assert!(
                 normalize_allowlist(&[path.into()]).is_err(),
                 "accepted {path}"
             );
         }
         assert!(normalize_allowlist(&["src/lib.rs".into(), "src/lib.rs".into()]).is_err());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_model_edit_paths_normalize_one_separator_and_reject_unsafe_aliases_atomically() {
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir_all(root.path().join("docs")).unwrap();
+        let target = root.path().join("docs/windows-run-and-recovery.md");
+        fs::write(&target, "original\n").unwrap();
+        let allowed = normalize_allowlist(&["docs/windows-run-and-recovery.md".into()]).unwrap();
+        let accepted = Edit {
+            path: r"docs\windows-run-and-recovery.md".into(),
+            content: "updated\n".into(),
+        };
+        assert!(
+            edits_would_change(root.path(), &allowed, std::slice::from_ref(&accepted)).unwrap()
+        );
+        assert_eq!(accepted.path, r"docs\windows-run-and-recovery.md");
+        apply_edits(root.path(), &allowed, vec![accepted]).unwrap();
+        assert_eq!(fs::read_to_string(&target).unwrap(), "updated\n");
+
+        for unsafe_path in [
+            r"\rooted.md",
+            r"C:\escape.md",
+            r"docs\..\escape.md",
+            r"\\server\share\escape.md",
+        ] {
+            fs::write(&target, "original\n").unwrap();
+            let result = apply_edits(
+                root.path(),
+                &allowed,
+                vec![
+                    Edit {
+                        path: "docs/windows-run-and-recovery.md".into(),
+                        content: "must-not-apply\n".into(),
+                    },
+                    Edit {
+                        path: unsafe_path.into(),
+                        content: "escape\n".into(),
+                    },
+                ],
+            );
+            assert!(result.is_err(), "accepted {unsafe_path}");
+            assert_eq!(fs::read_to_string(&target).unwrap(), "original\n");
+        }
+
+        let duplicate = apply_edits(
+            root.path(),
+            &allowed,
+            vec![
+                Edit {
+                    path: "docs/windows-run-and-recovery.md".into(),
+                    content: "first\n".into(),
+                },
+                Edit {
+                    path: r"docs\windows-run-and-recovery.md".into(),
+                    content: "second\n".into(),
+                },
+            ],
+        );
+        assert!(duplicate
+            .unwrap_err()
+            .to_string()
+            .contains("duplicate edit path"));
+        assert_eq!(fs::read_to_string(&target).unwrap(), "original\n");
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn non_windows_model_edit_paths_preserve_backslash_rejection() {
+        let error = normalize_model_edit_path(r"docs\windows-run-and-recovery.md").unwrap_err();
+        assert!(error.to_string().contains("invalid model edit path"));
     }
 
     #[test]

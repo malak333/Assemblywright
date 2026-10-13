@@ -774,7 +774,37 @@ try {
     $extendedFixtureReport = $null
     if ($LiveDemo) {
         $liveState = Join-Path $testRoot 'live state'
+        New-Item -ItemType Directory -Path $liveState -Force | Out-Null
+        $liveSeedSettings = [ordered]@{
+            schema_version = 1; endpoint = "http://localhost:$port/v1"; model = 'gui-review-fixture'; reasoning_effort = 'low'
+            orchestrator_provider = 'chatgpt'; orchestrator_model = 'gpt-plan'; orchestrator_reasoning_effort = 'high'
+            reviewer_provider = 'chatgpt'; reviewer_model = 'gpt-review'; reviewer_reasoning_effort = 'xhigh'
+            revision = 11; default_attempts = 2; timeout_seconds = 47
+        }
+        Write-Utf8File (Join-Path $liveState 'gui-settings.json') ($liveSeedSettings | ConvertTo-Json -Compress)
         $liveGui = Start-Gui $liveState ''
+        Click-Control $liveGui.Window 'SettingsButton'
+        $liveSettingsDialog = Find-Dialog $liveGui 'SettingsDialog'
+        Set-ControlText $liveSettingsDialog 'SettingsEndpointBox' "http://127.0.0.1:$port/v1"
+        Click-Control $liveSettingsDialog 'SettingsReloadButton'
+        $liveSettingsDialog = Find-Dialog $liveGui 'SettingsDialog'
+        Set-ControlText $liveSettingsDialog 'SettingsLocalModelBox' 'gui-fixture'
+        Select-ControlOption $liveSettingsDialog 'SettingsLocalReasoningBox' 'low'
+        Select-ControlOption $liveSettingsDialog 'SettingsOrchestratorModelBox' 'GPT Plan'
+        Select-ControlOption $liveSettingsDialog 'SettingsOrchestratorReasoningBox' 'High'
+        Select-ControlOption $liveSettingsDialog 'SettingsReviewerModelBox' 'GPT Review'
+        Select-ControlOption $liveSettingsDialog 'SettingsReviewerReasoningBox' 'Extra high'
+        Click-Control $liveSettingsDialog 'SettingsSaveButton'
+        $liveRoleSettings = Wait-Until {
+            $settingsPath = Join-Path $liveState 'gui-settings.json'
+            if (-not (Test-Path -LiteralPath $settingsPath)) { return $null }
+            $saved = Read-TestJson $settingsPath
+            if ($saved.endpoint -eq "http://127.0.0.1:$port/v1" -and $saved.model -eq 'gui-fixture' -and $saved.reasoning_effort -eq 'low' -and
+                $saved.orchestrator_provider -eq 'chatgpt' -and $saved.orchestrator_model -eq 'gpt-plan' -and $saved.orchestrator_reasoning_effort -eq 'high' -and
+                $saved.reviewer_provider -eq 'chatgpt' -and $saved.reviewer_model -eq 'gpt-review' -and $saved.reviewer_reasoning_effort -eq 'xhigh' -and
+                $saved.default_attempts -eq 2 -and $saved.timeout_seconds -eq 47) { return $saved }
+            return $null
+        } 'The live demo fixture settings were not saved exactly.'
         Select-Tab $liveGui.Window 'ChatTab' 'Chat'
         Set-ControlText $liveGui.Window 'ChatInputBox' 'Give a concise three-sentence feature specification for a slugify library with Unicode normalization, a CLI, and acceptance tests. Do not write code.'
         Click-Control $liveGui.Window 'ChatSendButton'
@@ -789,9 +819,39 @@ try {
         Wait-Until {
             try { return Find-Control $liveGui.Window 'RunDemoButton' } catch { return $null }
         } 'The feature editor did not expose its demo control.' | Out-Null
+        $demoRequestBaseline = if (Test-Path -LiteralPath $requestsFile) { @(Get-Content -LiteralPath $requestsFile).Count } else { 0 }
         Click-Control $liveGui.Window 'RunDemoButton'
         $extendedFixtureReport = Wait-Run $liveState 'completed' 180
         Assert-GuiCompleted $liveGui
+        $demoJobPath = Wait-Until {
+            $demoJobsRoot = Join-Path $testRoot 'target/windows-local-demo'
+            if (-not (Test-Path -LiteralPath $demoJobsRoot)) { return $null }
+            return Get-ChildItem -LiteralPath $demoJobsRoot -Filter 'job.json' -File -Recurse |
+                Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1 -ExpandProperty FullName
+        } 'The packaged demo did not retain its submitted job.'
+        $submittedDemo = Read-TestJson $demoJobPath
+        if ($submittedDemo.endpoint -ne "http://127.0.0.1:$port/v1" -or $submittedDemo.model -ne 'gui-fixture' -or $submittedDemo.reasoning_effort -ne 'low' -or
+            $submittedDemo.orchestrator_provider -ne 'chatgpt' -or $submittedDemo.orchestrator_model -ne 'gpt-plan' -or $submittedDemo.orchestrator_reasoning_effort -ne 'high' -or
+            $submittedDemo.reviewer_provider -ne 'chatgpt' -or $submittedDemo.reviewer_model -ne 'gpt-review' -or $submittedDemo.reviewer_reasoning_effort -ne 'xhigh' -or
+            $submittedDemo.max_attempts -ne 2 -or $submittedDemo.validation.timeout_seconds -ne 47 -or
+            $submittedDemo.validation.program -ne $python -or (@($submittedDemo.validation.args) -join "`n") -ne (@('-m', 'unittest', 'discover', '-s', 'tests', '-v') -join "`n")) {
+            throw 'Run demo did not submit the exact saved implementation, role, attempt, and timeout settings.'
+        }
+        $demoRequests = @()
+        if (Test-Path -LiteralPath $requestsFile) {
+            $demoRequests = @(Get-Content -LiteralPath $requestsFile | Select-Object -Skip $demoRequestBaseline | ForEach-Object { $_ | ConvertFrom-Json })
+        }
+        if (@($demoRequests | Where-Object { $_.model -eq 'gui-fixture' -and $_.messages[-1].content -match 'src/slugify.py' }).Count -lt 1) {
+            throw 'The packaged demo did not call the configured isolated local implementation model.'
+        }
+        $acceptanceStdout = Join-Path $testRoot 'demo-acceptance.stdout.log'
+        $acceptanceStderr = Join-Path $testRoot 'demo-acceptance.stderr.log'
+        $acceptanceProcess = Start-Process -FilePath $python -ArgumentList @('-m', 'unittest', 'discover', '-s', 'tests', '-v') -WorkingDirectory $extendedFixtureReport.candidate -WindowStyle Hidden -RedirectStandardOutput $acceptanceStdout -RedirectStandardError $acceptanceStderr -PassThru -Wait
+        $acceptanceOutput = [System.IO.File]::ReadAllText($acceptanceStdout, $utf8) + [System.IO.File]::ReadAllText($acceptanceStderr, $utf8)
+        if ($acceptanceProcess.ExitCode -ne 0 -or $acceptanceOutput -notmatch 'Ran 12 tests') {
+            throw 'The completed demo candidate did not pass all twelve acceptance tests at the real process boundary.'
+        }
+        $acceptanceProcess.Dispose()
         Close-Gui $liveGui
     }
     $evidence = [ordered]@{
@@ -812,6 +872,7 @@ try {
         github_publication_cases = $publicationCases
         extended_fixture_run_id = $(if ($extendedFixtureReport) { $extendedFixtureReport.run_id } else { $null })
         extended_fixture_chat = $(if ($LiveDemo) { 'passed' } else { $null })
+        extended_fixture_saved_job = $(if ($LiveDemo) { [ordered]@{ endpoint = $submittedDemo.endpoint; implementation_model = $submittedDemo.model; implementation_reasoning_effort = $submittedDemo.reasoning_effort; orchestrator_model = $submittedDemo.orchestrator_model; orchestrator_reasoning_effort = $submittedDemo.orchestrator_reasoning_effort; reviewer_model = $submittedDemo.reviewer_model; reviewer_reasoning_effort = $submittedDemo.reviewer_reasoning_effort; max_attempts = $submittedDemo.max_attempts; timeout_seconds = $submittedDemo.validation.timeout_seconds; acceptance_tests = 12 } } else { $null })
     }
     $evidencePath = Join-Path $evidenceRoot 'gui-e2e.json'
     Write-Utf8File $evidencePath ($evidence | ConvertTo-Json -Depth 6)

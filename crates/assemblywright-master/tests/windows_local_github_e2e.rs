@@ -125,6 +125,29 @@ impl Fixture {
         self.completed_run_with(id, &self.source, &self.candidate, &self.candidate_head);
     }
 
+    fn connected_completed_run(&self) -> (String, String) {
+        let state = self.state_arg();
+        let project = self.project_arg();
+        let (saved, _) = self.invoke(&[
+            "connection",
+            "save",
+            "--state-dir",
+            &state,
+            "--project",
+            &project,
+            "--repository",
+            "fixture-owner/example",
+            "--base-branch",
+            "main",
+            "--expected-revision",
+            "0",
+        ]);
+        assert!(saved.status.success());
+        let id = Uuid::new_v4();
+        self.completed_run(id);
+        (state, id.to_string())
+    }
+
     fn completed_run_with(&self, id: Uuid, source: &str, candidate: &Path, candidate_head: &str) {
         let dir = self.state.join("runs").join(id.to_string());
         fs::create_dir_all(&dir).unwrap();
@@ -941,6 +964,184 @@ fn structured_check_polling_handles_arrival_pending_and_pass() {
 }
 
 #[test]
+fn rate_limited_required_check_read_honors_retry_after_then_passes() {
+    let f = Fixture::new();
+    let (state, id) = f.connected_completed_run();
+    let started = Instant::now();
+    let mut command = f.command();
+    command
+        .env("FIXTURE_CHECK_RATE_LIMIT_COUNT", "1")
+        .env("FIXTURE_CHECK_RETRY_AFTER_SECONDS", "1")
+        .args([
+            "publish",
+            "--state-dir",
+            &state,
+            "--run-id",
+            &id,
+            "--expected-revision",
+            "1",
+        ]);
+    let output = command.output().unwrap();
+    assert!(
+        output.status.success(),
+        "stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        started.elapsed() >= Duration::from_millis(900),
+        "retry-after was not honored"
+    );
+    assert_eq!(
+        fs::read_to_string(f.root.join("checks-count.txt"))
+            .unwrap()
+            .trim(),
+        "2"
+    );
+    assert!(f.root.join("merged.flag").exists());
+}
+
+#[test]
+fn repeated_required_check_throttling_stops_after_bounded_retries() {
+    let f = Fixture::new();
+    let (state, id) = f.connected_completed_run();
+    let mut command = f.command_with_check_timeout(10_000);
+    command.env("FIXTURE_CHECK_RATE_LIMIT_COUNT", "99").args([
+        "publish",
+        "--state-dir",
+        &state,
+        "--run-id",
+        &id,
+        "--expected-revision",
+        "1",
+    ]);
+    let started = Instant::now();
+    let output = command.output().unwrap();
+    assert!(!output.status.success());
+    assert!(started.elapsed() < Duration::from_secs(30));
+    assert!(String::from_utf8_lossy(&output.stdout).contains("after 4 bounded retries"));
+    assert_eq!(
+        fs::read_to_string(f.root.join("checks-count.txt"))
+            .unwrap()
+            .trim(),
+        "5"
+    );
+    assert!(!f.root.join("merged.flag").exists());
+    let (_, status) = f.invoke(&["status", "--state-dir", &state]);
+    assert_eq!(status["publications"][&id]["status"], "attention");
+}
+
+#[test]
+fn alternating_rate_limits_and_pending_checks_share_one_retry_cap() {
+    let f = Fixture::new();
+    let (state, id) = f.connected_completed_run();
+    let mut command = f.command_with_check_timeout(10_000);
+    command
+        .env("FIXTURE_CHECK_ALTERNATING_RATE_LIMIT", "1")
+        .args([
+            "publish",
+            "--state-dir",
+            &state,
+            "--run-id",
+            &id,
+            "--expected-revision",
+            "1",
+        ]);
+    let output = command.output().unwrap();
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stdout).contains("after 4 bounded retries"));
+    assert_eq!(
+        fs::read_to_string(f.root.join("checks-count.txt"))
+            .unwrap()
+            .trim(),
+        "9"
+    );
+    assert!(!f.root.join("merged.flag").exists());
+    let (_, status) = f.invoke(&["status", "--state-dir", &state]);
+    assert_eq!(status["publications"][&id]["status"], "attention");
+}
+
+#[test]
+fn required_check_rate_limit_backoff_is_promptly_interruptible() {
+    for cancel in [true, false] {
+        let f = Fixture::new();
+        let (state, id) = f.connected_completed_run();
+        let mut command = f.command();
+        command
+            .env("FIXTURE_CHECK_RATE_LIMIT_COUNT", "99")
+            .args([
+                "publish",
+                "--state-dir",
+                &state,
+                "--run-id",
+                &id,
+                "--expected-revision",
+                "1",
+            ])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let child = command.spawn().unwrap();
+        let arrival_deadline = Instant::now() + Duration::from_secs(15);
+        while !f.root.join("checks-count.txt").exists() && Instant::now() < arrival_deadline {
+            thread::sleep(Duration::from_millis(25));
+        }
+        assert!(f.root.join("checks-count.txt").exists());
+        let interrupted_at = Instant::now();
+        if cancel {
+            let (cancelled, _) = f.invoke(&["cancel", "--state-dir", &state]);
+            assert!(cancelled.status.success());
+        } else {
+            fs::write(f.state.join("pause.flag"), "paused\n").unwrap();
+        }
+        let output = child.wait_with_output().unwrap();
+        assert!(!output.status.success());
+        assert!(
+            interrupted_at.elapsed() < Duration::from_secs(3),
+            "rate-limit backoff did not stop promptly"
+        );
+        assert!(!f.root.join("merged.flag").exists());
+        let (_, status) = f.invoke(&["status", "--state-dir", &state]);
+        assert_eq!(
+            status["publications"][&id]["status"],
+            if cancel { "cancelled" } else { "attention" }
+        );
+    }
+}
+
+#[test]
+fn non_rate_limit_check_errors_fail_closed_without_retry_or_merge() {
+    for message in [
+        "HTTP 401: Bad credentials",
+        "HTTP 403: Resource not accessible by integration",
+        "HTTP 500: server error",
+    ] {
+        let f = Fixture::new();
+        let (state, id) = f.connected_completed_run();
+        let mut command = f.command();
+        command.env("FIXTURE_CHECK_ERROR", message).args([
+            "publish",
+            "--state-dir",
+            &state,
+            "--run-id",
+            &id,
+            "--expected-revision",
+            "1",
+        ]);
+        let output = command.output().unwrap();
+        assert!(!output.status.success());
+        assert_eq!(
+            fs::read_to_string(f.root.join("checks-count.txt"))
+                .unwrap()
+                .trim(),
+            "1"
+        );
+        assert!(!f.root.join("merged.flag").exists());
+        let (_, status) = f.invoke(&["status", "--state-dir", &state]);
+        assert_eq!(status["publications"][&id]["status"], "attention");
+    }
+}
+
+#[test]
 fn pending_structured_checks_are_promptly_interruptible_by_cancel_and_pause() {
     for cancel in [true, false] {
         let f = Fixture::new();
@@ -1242,7 +1443,7 @@ fn cancellation_terminates_external_work_and_retains_cancelled_status() {
     assert_eq!(cancel["cancelled"], true);
     let output = child.wait_with_output().unwrap();
     assert!(!output.status.success());
-    assert!(String::from_utf8_lossy(&output.stdout).contains("cancelled or paused"));
+    assert!(String::from_utf8_lossy(&output.stdout).contains("cancelled"));
     let (_, status) = f.invoke(&["status", "--state-dir", &state]);
     assert_eq!(status["publications"][&id_text]["status"], "cancelled");
 }
@@ -1519,6 +1720,16 @@ if ($args[0] -eq 'pr' -and $args[1] -eq 'checks') {
   if ($args -contains '--watch' -and $args -contains '--json') { [Console]::Error.WriteLine('cannot use `--watch` with `--json` flag'); exit 1 }
   $countPath = Join-Path $env:FIXTURE_DIR 'checks-count.txt'; $count = if (Test-Path $countPath) { [int](Get-Content $countPath) + 1 } else { 1 }; Set-Content -LiteralPath $countPath -Value $count -NoNewline
   if ($env:FIXTURE_SLOW_CHECKS -eq '1') { Start-Sleep -Seconds 30 }
+  if ($env:FIXTURE_CHECK_RATE_LIMIT_COUNT -and $count -le [int]$env:FIXTURE_CHECK_RATE_LIMIT_COUNT) {
+    [Console]::Error.WriteLine('HTTP 429: secondary rate limit')
+    if ($env:FIXTURE_CHECK_RETRY_AFTER_SECONDS) { [Console]::Error.WriteLine('Retry-After: ' + $env:FIXTURE_CHECK_RETRY_AFTER_SECONDS) }
+    exit 1
+  }
+  if ($env:FIXTURE_CHECK_ALTERNATING_RATE_LIMIT -eq '1') {
+    if ($count % 2 -eq 1) { [Console]::Error.WriteLine('HTTP 429: secondary rate limit'); exit 1 }
+    Write-Output '[{"bucket":"pending","name":"test","state":"IN_PROGRESS","workflow":"CI"}]'; exit 8
+  }
+  if ($env:FIXTURE_CHECK_ERROR) { [Console]::Error.WriteLine($env:FIXTURE_CHECK_ERROR); exit 1 }
   if ($env:FIXTURE_CHECK_ARRIVAL -eq '1' -and $count -eq 1) { $head = Get-Content (Join-Path $env:FIXTURE_DIR 'pr-head.txt'); [Console]::Error.WriteLine("no required checks reported on the '" + $head + "' branch"); exit 1 }
   if (($env:FIXTURE_CHECK_ARRIVAL -eq '1' -and $count -eq 2) -or $env:FIXTURE_PENDING_CHECKS -eq '1') { Write-Output '[{"bucket":"pending","name":"test","state":"IN_PROGRESS","workflow":"CI"}]'; exit 8 }
   if ($env:FIXTURE_EMPTY_CHECKS -eq '1') { Write-Output '[]'; exit 0 }

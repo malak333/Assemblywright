@@ -18,7 +18,11 @@ const MAX_CAPTURE: usize = 256 * 1024;
 const MAX_AUDIT: usize = 500;
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(120);
 const PUBLISH_TIMEOUT: Duration = Duration::from_secs(20 * 60);
-const CHECK_POLL_INTERVAL: Duration = Duration::from_millis(750);
+const CHECK_POLL_INTERVAL: Duration = Duration::from_secs(15);
+const RATE_LIMIT_BASE_DELAY: Duration = Duration::from_secs(60);
+const MAX_RATE_LIMIT_RETRIES: u32 = 4;
+const FIXTURE_CHECK_POLL_INTERVAL: Duration = Duration::from_millis(100);
+const FIXTURE_RATE_LIMIT_BASE_DELAY: Duration = Duration::from_millis(200);
 const STOP_POLL_INTERVAL: Duration = Duration::from_millis(150);
 
 #[derive(Parser)]
@@ -143,6 +147,8 @@ struct Programs {
     gh: PathBuf,
     git: PathBuf,
     check_timeout: Duration,
+    check_poll_interval: Duration,
+    rate_limit_base_delay: Duration,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -308,6 +314,16 @@ impl Programs {
                 cli.fixture_git.is_some(),
             )?,
             check_timeout,
+            check_poll_interval: if fixture {
+                FIXTURE_CHECK_POLL_INTERVAL
+            } else {
+                CHECK_POLL_INTERVAL
+            },
+            rate_limit_base_delay: if fixture {
+                FIXTURE_RATE_LIMIT_BASE_DELAY
+            } else {
+                RATE_LIMIT_BASE_DELAY
+            },
         })
     }
 }
@@ -1313,6 +1329,12 @@ enum RequiredCheckPoll {
     Passed,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum RateLimitClassification {
+    NotRateLimited,
+    RateLimited { retry_after: Option<Duration> },
+}
+
 async fn wait_for_required_checks(
     state: &Path,
     p: &Programs,
@@ -1320,6 +1342,7 @@ async fn wait_for_required_checks(
     number: &str,
 ) -> Result<()> {
     let deadline = tokio::time::Instant::now() + p.check_timeout;
+    let mut rate_limit_retries = 0;
     loop {
         stop_check(state)?;
         let timeout = remaining_check_timeout(deadline)?;
@@ -1347,11 +1370,35 @@ async fn wait_for_required_checks(
             }
             Err(error) => return Err(error).context("read required checks"),
         };
+        match classify_rate_limit(&output)? {
+            RateLimitClassification::NotRateLimited => {}
+            RateLimitClassification::RateLimited { retry_after } => {
+                if rate_limit_retries >= MAX_RATE_LIMIT_RETRIES {
+                    bail!(
+                        "required-check read remained rate limited after {} bounded retries",
+                        MAX_RATE_LIMIT_RETRIES
+                    )
+                }
+                let delay = retry_after.unwrap_or(fallback_rate_limit_delay(
+                    p.rate_limit_base_delay,
+                    rate_limit_retries,
+                )?);
+                rate_limit_retries += 1;
+                eprintln!(
+                    "[github] required-check read rate limited; bounded retry {}/{} after {:.3} seconds",
+                    rate_limit_retries,
+                    MAX_RATE_LIMIT_RETRIES,
+                    delay.as_secs_f64()
+                );
+                wait_until_next_check_poll(state, deadline, delay).await?;
+                continue;
+            }
+        }
         match classify_required_checks(&output, &publication.branch)? {
             RequiredCheckPoll::Passed => return Ok(()),
             RequiredCheckPoll::Waiting => {
                 eprintln!("[github] waiting for required checks");
-                wait_until_next_check_poll(state, deadline).await?;
+                wait_until_next_check_poll(state, deadline, p.check_poll_interval).await?;
             }
         }
     }
@@ -1364,16 +1411,79 @@ fn remaining_check_timeout(deadline: tokio::time::Instant) -> Result<Duration> {
         .ok_or_else(|| anyhow!("required-check wait exceeded its bounded deadline"))
 }
 
-async fn wait_until_next_check_poll(state: &Path, deadline: tokio::time::Instant) -> Result<()> {
-    let poll_deadline = (tokio::time::Instant::now() + CHECK_POLL_INTERVAL).min(deadline);
+async fn wait_until_next_check_poll(
+    state: &Path,
+    deadline: tokio::time::Instant,
+    delay: Duration,
+) -> Result<()> {
+    let now = tokio::time::Instant::now();
+    let remaining = deadline
+        .checked_duration_since(now)
+        .filter(|remaining| !remaining.is_zero())
+        .ok_or_else(|| anyhow!("required-check wait exceeded its bounded deadline"))?;
+    let reaches_deadline = delay >= remaining;
+    let poll_deadline = now + delay.min(remaining);
     loop {
         stop_check(state)?;
         let now = tokio::time::Instant::now();
         if now >= poll_deadline {
-            return remaining_check_timeout(deadline).map(|_| ());
+            return if reaches_deadline {
+                remaining_check_timeout(deadline).map(|_| ())
+            } else {
+                Ok(())
+            };
         }
         tokio::time::sleep(STOP_POLL_INTERVAL.min(poll_deadline - now)).await;
     }
+}
+
+fn classify_rate_limit(output: &Output) -> Result<RateLimitClassification> {
+    if output.status == 0 || output.status == 8 || !contains_http_429(&output.stderr) {
+        return Ok(RateLimitClassification::NotRateLimited);
+    }
+    let mut retry_after = None;
+    for line in output.stderr.lines() {
+        let Some((name, raw_value)) = line.trim().split_once(':') else {
+            continue;
+        };
+        if !name.trim().eq_ignore_ascii_case("retry-after") {
+            continue;
+        }
+        let value = raw_value.trim();
+        let seconds = value
+            .parse::<u64>()
+            .with_context(|| format!("GitHub returned an invalid retry-after value: {value:?}"))?;
+        let parsed = Duration::from_secs(seconds);
+        if retry_after.replace(parsed).is_some() {
+            bail!("GitHub returned multiple retry-after values")
+        }
+    }
+    Ok(RateLimitClassification::RateLimited { retry_after })
+}
+
+fn contains_http_429(stderr: &str) -> bool {
+    stderr.lines().any(|line| {
+        let tokens = line
+            .split(|character: char| !character.is_ascii_alphanumeric())
+            .filter(|token| !token.is_empty())
+            .map(str::to_ascii_lowercase)
+            .collect::<Vec<_>>();
+        tokens.windows(2).any(|pair| pair == ["http", "429"])
+            || tokens
+                .windows(3)
+                .any(|triple| triple == ["status", "code", "429"])
+    })
+}
+
+fn fallback_rate_limit_delay(base: Duration, retry: u32) -> Result<Duration> {
+    if retry >= MAX_RATE_LIMIT_RETRIES {
+        bail!("required-check rate-limit retry count exceeded its bound")
+    }
+    let multiplier = 1_u32
+        .checked_shl(retry)
+        .ok_or_else(|| anyhow!("required-check rate-limit backoff overflow"))?;
+    base.checked_mul(multiplier)
+        .ok_or_else(|| anyhow!("required-check rate-limit backoff overflow"))
 }
 
 fn classify_required_checks(output: &Output, branch: &str) -> Result<RequiredCheckPoll> {
@@ -2434,6 +2544,67 @@ mod tests {
             stderr: String::new(),
         };
         assert!(classify_required_checks(&unknown, "assemblywright/run").is_err());
+    }
+    #[test]
+    fn rate_limit_classification_is_explicit_and_retry_after_is_strict() {
+        let throttled = Output {
+            status: 1,
+            stdout: String::new(),
+            stderr: "HTTP 429: secondary rate limit\nRetry-After: 73\n".into(),
+        };
+        assert_eq!(
+            classify_rate_limit(&throttled).unwrap(),
+            RateLimitClassification::RateLimited {
+                retry_after: Some(Duration::from_secs(73))
+            }
+        );
+        let no_header = Output {
+            status: 1,
+            stdout: String::new(),
+            stderr: "gh: request failed with HTTP 429 (https://api.github.com/graphql)\n".into(),
+        };
+        assert_eq!(
+            classify_rate_limit(&no_header).unwrap(),
+            RateLimitClassification::RateLimited { retry_after: None }
+        );
+        for stderr in [
+            "HTTP 401: Bad credentials",
+            "HTTP 403: Resource not accessible by integration",
+            "HTTP 500: server error",
+            "GraphQL request 429 failed",
+        ] {
+            let output = Output {
+                status: 1,
+                stdout: String::new(),
+                stderr: stderr.into(),
+            };
+            assert_eq!(
+                classify_rate_limit(&output).unwrap(),
+                RateLimitClassification::NotRateLimited,
+                "{stderr}"
+            );
+        }
+        let malformed = Output {
+            status: 1,
+            stdout: String::new(),
+            stderr: "HTTP 429\nRetry-After: soon\n".into(),
+        };
+        assert!(classify_rate_limit(&malformed).is_err());
+    }
+    #[test]
+    fn fallback_rate_limit_backoff_is_exponential_and_bounded() {
+        assert_eq!(
+            (0..MAX_RATE_LIMIT_RETRIES)
+                .map(|retry| fallback_rate_limit_delay(RATE_LIMIT_BASE_DELAY, retry).unwrap())
+                .collect::<Vec<_>>(),
+            vec![
+                Duration::from_secs(60),
+                Duration::from_secs(120),
+                Duration::from_secs(240),
+                Duration::from_secs(480),
+            ]
+        );
+        assert!(fallback_rate_limit_delay(RATE_LIMIT_BASE_DELAY, MAX_RATE_LIMIT_RETRIES).is_err());
     }
     #[test]
     fn required_check_wait_has_a_hard_deadline() {

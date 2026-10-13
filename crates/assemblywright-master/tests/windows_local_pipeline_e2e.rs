@@ -437,6 +437,75 @@ fn confinement_still_rejects_an_actual_non_allowlisted_model_edit() {
     );
 }
 
+#[cfg(windows)]
+#[test]
+fn windows_model_edit_separator_is_canonicalized_after_unsafe_aliases_fail_without_effects() {
+    let fixture = Fixture::new();
+    let server = FakeModel::start(vec![
+        edits(r"\rooted.md", "rooted\n"),
+        edits(r"C:\escape.md", "drive\n"),
+        edits(r"docs\..\escape.md", "traversal\n"),
+        json!({"edits":[
+            {"path":"docs/windows-run-and-recovery.md","content":"first alias\n"},
+            {"path":r"docs\windows-run-and-recovery.md","content":"second alias\n"}
+        ]})
+        .to_string(),
+        edits(
+            r"docs\windows-run-and-recovery.md",
+            "GOOD = 'windows separator accepted'\n",
+        ),
+        review(true, &[]),
+    ]);
+    let mut job = fixture.job(server.endpoint(), 5, 30);
+    job["specification"] =
+        json!("Create the approved Windows run and recovery guide containing GOOD.");
+    job["allowed_files"] = json!(["docs/windows-run-and-recovery.md"]);
+    job["validation"]["args"] = json!([
+        "--exact",
+        "validator_windows_model_path_fixture",
+        "--ignored",
+        "--nocapture"
+    ]);
+
+    let output = fixture.run(&job);
+    let requests = server.join();
+
+    assert_success(&output);
+    assert_eq!(fixture.report()["attempt"], 5);
+    assert!(requests[1].contains("invalid model edit path"));
+    assert!(requests[2].contains("invalid model edit path"));
+    assert!(requests[3].contains("invalid model edit path"));
+    assert!(requests[4].contains("duplicate edit path"));
+    let report = fixture.report();
+    let candidate = PathBuf::from(report["candidate"].as_str().unwrap());
+    assert_eq!(
+        fs::read_to_string(candidate.join("docs/windows-run-and-recovery.md")).unwrap(),
+        "GOOD = 'windows separator accepted'\n"
+    );
+    assert!(!candidate.join("rooted.md").exists());
+    assert!(!candidate.join("escape.md").exists());
+    assert!(Repository::open(&candidate)
+        .unwrap()
+        .statuses(None)
+        .unwrap()
+        .is_empty());
+    assert!(!fixture.repo.join("docs").exists());
+    assert!(!fixture.root.path().join("escape.md").exists());
+    assert!(Repository::open(&fixture.repo)
+        .unwrap()
+        .statuses(None)
+        .unwrap()
+        .is_empty());
+
+    let run = fixture
+        .state
+        .join("runs")
+        .join(report["run_id"].as_str().unwrap());
+    let raw_response =
+        fs::read_to_string(run.join("artifacts/attempt-5-implementation-response.json")).unwrap();
+    assert!(raw_response.contains(r"docs\\\\windows-run-and-recovery.md"));
+}
+
 #[test]
 fn cancel_and_pause_during_snapshot_stop_candidate_writes_before_inference() {
     for action in ["cancel", "pause"] {
@@ -1217,6 +1286,17 @@ fn validator_success_fixture() {
     let content = fs::read_to_string("src.py").expect("candidate src.py");
     if !content.contains("GOOD") {
         eprintln!("expected GOOD marker");
+        std::process::exit(7);
+    }
+}
+
+#[test]
+#[ignore]
+fn validator_windows_model_path_fixture() {
+    let content = fs::read_to_string("docs/windows-run-and-recovery.md")
+        .expect("candidate Windows run and recovery guide");
+    if !content.contains("GOOD") {
+        eprintln!("expected GOOD marker in Windows run and recovery guide");
         std::process::exit(7);
     }
 }

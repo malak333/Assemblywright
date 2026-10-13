@@ -4,6 +4,7 @@ param(
     [string]$Action = 'run',
     [string]$Job,
     [switch]$Demo,
+    [string]$DemoSettingsJob,
     [string]$StateDir = (Join-Path $env:LOCALAPPDATA 'Assemblywright/local-pipeline'),
     [string]$RunnerPath,
     [switch]$NoBuild
@@ -29,6 +30,9 @@ function Invoke-CheckedGit([string]$Directory, [string[]]$Arguments) {
 if ($Demo -and ($Job -or $Action -ne 'run')) {
     throw '-Demo is a run action and cannot be combined with -Job.'
 }
+if ($DemoSettingsJob -and -not $Demo) {
+    throw '-DemoSettingsJob can only be used with -Demo.'
+}
 if ($Action -eq 'run' -and -not $Demo -and -not $Job) {
     throw 'Supply -Job path/to/job.json or -Demo.'
 }
@@ -45,6 +49,14 @@ if (-not (Test-Path -LiteralPath $binary -PathType Leaf)) {
 }
 
 if ($Demo) {
+    $demoSettings = $null
+    if ($DemoSettingsJob) {
+        $resolvedDemoSettings = (Resolve-Path -LiteralPath $DemoSettingsJob).Path
+        $demoSettingsInfo = Get-Item -LiteralPath $resolvedDemoSettings
+        if ($demoSettingsInfo.Length -gt 2MB) { throw 'The demo settings job is too large.' }
+        $demoSettings = [System.IO.File]::ReadAllText($resolvedDemoSettings, $utf8) | ConvertFrom-Json
+        if (-not $demoSettings) { throw 'The demo settings job is empty.' }
+    }
     $python = (Get-Command python -ErrorAction Stop).Source
     $demoRoot = Join-Path $repositoryRoot ('target/windows-local-demo/' + [guid]::NewGuid().ToString('N'))
     $sourceRoot = Join-Path $demoRoot 'source'
@@ -128,10 +140,19 @@ if __name__ == "__main__":
         repository = $sourceRoot
         specification = 'Implement src/slugify.py and src/cli.py using only the Python standard library. slugify(text, max_length=80) requires a string (otherwise TypeError) and a positive integer max_length (bool and all invalid limits raise ValueError). Normalize Unicode with NFKD and ASCII transliteration, lowercase, replace each run of non-alphanumeric ASCII characters with one hyphen, strip leading/trailing hyphens, truncate to max_length then strip trailing hyphens. Empty or punctuation-only input returns an empty string. The CLI takes a positional text and optional --max-length integer, prints the slug, and uses argparse exit code 2 for invalid limits. Do not change tests. Finish both the library and CLI.'
         allowed_files = @('src/slugify.py', 'src/cli.py')
-        validation = @{ program = $python; args = @('-m', 'unittest', 'discover', '-s', 'tests', '-v'); timeout_seconds = 60 }
-        endpoint = 'http://127.0.0.1:8080/v1'
-        model = 'qwen3.6-35b-a3b'
-        max_attempts = 3
+        validation = @{ program = $python; args = @('-m', 'unittest', 'discover', '-s', 'tests', '-v'); timeout_seconds = $(if ($demoSettings) { $demoSettings.validation.timeout_seconds } else { 60 }) }
+        endpoint = $(if ($demoSettings) { $demoSettings.endpoint } else { 'http://127.0.0.1:8080/v1' })
+        model = $(if ($demoSettings) { $demoSettings.model } else { 'qwen3.6-35b-a3b' })
+        max_attempts = $(if ($demoSettings) { $demoSettings.max_attempts } else { 3 })
+    }
+    if ($demoSettings) {
+        $demoJob['reasoning_effort'] = $demoSettings.reasoning_effort
+        $demoJob['orchestrator_provider'] = $demoSettings.orchestrator_provider
+        $demoJob['orchestrator_model'] = $demoSettings.orchestrator_model
+        $demoJob['orchestrator_reasoning_effort'] = $demoSettings.orchestrator_reasoning_effort
+        $demoJob['reviewer_provider'] = $demoSettings.reviewer_provider
+        $demoJob['reviewer_model'] = $demoSettings.reviewer_model
+        $demoJob['reviewer_reasoning_effort'] = $demoSettings.reviewer_reasoning_effort
     }
     Write-Utf8File $Job ($demoJob | ConvertTo-Json -Depth 6)
     Write-Host "Demonstration source: $sourceRoot"

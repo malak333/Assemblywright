@@ -174,18 +174,42 @@ def main():
                 )
             return api("control", dict(action=action, **values))
 
-        def wait(predicate, timeout=60):
+        def bounded_diagnostic(value, maximum=64 * 1024):
+            text = value if isinstance(value, str) else json.dumps(value, sort_keys=True)
+            if len(text) <= maximum:
+                return text
+            return "[truncated]" + text[-maximum:]
+
+        def bounded_file_tail(path, maximum=64 * 1024):
+            with path.open("rb") as source:
+                source.seek(0, os.SEEK_END)
+                length = source.tell()
+                source.seek(max(0, length - maximum), os.SEEK_SET)
+                return source.read(maximum).decode(errors="replace")
+
+        def wait(predicate, timeout=60, description="condition", diagnostic=None):
             deadline = time.monotonic() + timeout
             snapshot = None
+            observations = []
             while time.monotonic() < deadline:
                 try:
                     snapshot = api()
+                    if diagnostic is not None:
+                        observation = diagnostic(snapshot)
+                        if not observations or observation != observations[-1]:
+                            observations.append(observation)
+                            observations = observations[-16:]
                     if predicate(snapshot):
                         return snapshot
                 except (OSError, urllib.error.URLError):
                     pass
                 time.sleep(0.05)
-            raise AssertionError("Timed out: " + json.dumps(snapshot) + "\n" + (root / "runner.log").read_text(errors="replace"))
+            raise AssertionError(
+                "Timed out waiting for " + description
+                + ": " + bounded_diagnostic(snapshot)
+                + "\nbounded readiness transitions:\n" + bounded_diagnostic(observations)
+                + "\nbounded runner log tail:\n" + bounded_file_tail(root / "runner.log")
+            )
 
         def publication_controls_idle(snapshot):
             return (
@@ -199,6 +223,42 @@ def main():
                 and not snapshot["github_setup_busy"]
                 and not snapshot["github_setup_unresolved"]
                 and not snapshot["github_publication_running"]
+            )
+
+        def abandonment_readiness(snapshot, feature_id):
+            feature = next(item for item in snapshot["queue"] if item["id"] == feature_id)
+            return {
+                "revision": snapshot["revision"],
+                "emergency_paused": snapshot["emergency_paused"],
+                "running": snapshot["running"],
+                "planning_running": snapshot["planning_running"],
+                "escalation_running": snapshot["escalation_running"],
+                "chat_running": snapshot["chat_running"],
+                "tools_running": snapshot["tools_running"],
+                "tools_need_attention": snapshot["tools_need_attention"],
+                "github_setup_busy": snapshot["github_setup_busy"],
+                "github_setup_unresolved": snapshot["github_setup_unresolved"],
+                "github_publication_running": snapshot["github_publication_running"],
+                "status": feature["status"],
+                "checkpoint": feature["checkpoint"],
+                "publication_status": feature["publication_status"],
+                "publication_stage": feature["publication_stage"],
+                "publication_commit_sha": feature["publication_commit_sha"],
+                "publication_pr_url": feature["publication_pr_url"],
+                "publication_merged_sha": feature["publication_merged_sha"],
+                "can_reconcile_publication": feature["can_reconcile_publication"],
+                "can_abandon_publication": feature["can_abandon_publication"],
+            }
+
+        def publication_abandonment_ready(snapshot, feature_id, expected_stage):
+            readiness = abandonment_readiness(snapshot, feature_id)
+            return (
+                publication_controls_idle(snapshot)
+                and readiness["status"] == "failed"
+                and readiness["checkpoint"] == "publication_attention"
+                and readiness["publication_status"] == "attention"
+                and readiness["publication_stage"] == expected_stage
+                and readiness["can_abandon_publication"] is True
             )
 
         def reconcile_after_stop(feature_id, timeout=10):
@@ -548,11 +608,15 @@ def main():
             waiting_feature = next(item for item in waiting["queue"] if item["id"] == abandoned_id)
             exact_head = waiting_feature["publication_commit_sha"]
             control("stop")
-            attention = wait(lambda value: publication_controls_idle(value) and next(
-                item for item in value["queue"] if item["id"] == abandoned_id
-            )["checkpoint"] == "publication_attention")
+            attention = wait(
+                lambda value: publication_abandonment_ready(
+                    value, abandoned_id, "wait_required_checks"
+                ),
+                description="closed-unmerged publication abandonment readiness",
+                diagnostic=lambda value: abandonment_readiness(value, abandoned_id),
+            )
             attention_feature = next(item for item in attention["queue"] if item["id"] == abandoned_id)
-            assert attention_feature["can_abandon_publication"] is True
+            assert attention_feature["can_abandon_publication"] is True, abandonment_readiness(attention, abandoned_id)
 
             def abandon(snapshot, checkpoint="publication_attention"):
                 return api("publication", dict(
@@ -692,11 +756,13 @@ def main():
             pre_effect_id = enqueue("connected", "[publication:pre-effect-abandon]")
             (projects / "connected" / "README.md").write_text("unpublished local baseline\n")
             control("start")
-            pre_effect_attention = wait(lambda value: (
-                publication_controls_idle(value)
-                and next(item for item in value["queue"] if item["id"] == pre_effect_id)["checkpoint"]
-                    == "publication_attention"
-            ))
+            pre_effect_attention = wait(
+                lambda value: publication_abandonment_ready(
+                    value, pre_effect_id, "prepare_candidate"
+                ),
+                description="pre-effect publication abandonment readiness",
+                diagnostic=lambda value: abandonment_readiness(value, pre_effect_id),
+            )
             pre_effect_feature = next(
                 item for item in pre_effect_attention["queue"] if item["id"] == pre_effect_id
             )
@@ -705,7 +771,9 @@ def main():
             assert pre_effect_feature["publication_stage"] == "prepare_candidate"
             assert pre_effect_feature["publication_commit_sha"] is None
             assert pre_effect_feature["publication_pr_url"] is None
-            assert pre_effect_feature["can_abandon_publication"] is True
+            assert pre_effect_feature["can_abandon_publication"] is True, abandonment_readiness(
+                pre_effect_attention, pre_effect_id
+            )
             with closing(sqlite3.connect(data / "developer.sqlite3")) as connection_db:
                 durable_pre_effect = json.loads(connection_db.execute(
                     "SELECT state FROM developer_state WHERE id=1"

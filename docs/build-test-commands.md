@@ -652,6 +652,7 @@ C# compiler and the existing Rust runner:
 ./scripts/build-windows-gui.ps1
 ./scripts/test-windows-gui.ps1 -NoBuild
 ./scripts/test-windows-gui.ps1 -NoBuild -LiveDemo
+./scripts/test-windows-process-capture.ps1
 ./scripts/install-windows-gui.ps1 -NoBuild
 ```
 
@@ -664,6 +665,10 @@ screenshots, and cross-browser matrix in the owner-selected validation command.
 `test-windows-gui.ps1 -LiveDemo` retains a historical flag name but exercises
 extended fixture scenarios. Its evidence is fixture-only, separate from real
 authenticated ChatGPT and local-inference proof through the installed app.
+The full GUI gate also runs the captured-process regression: 320 immediate
+children cover exact stdout/stderr, successful/nonzero exits, launch failure
+and released process handles. The test compiles the actual production process
+helper with a credential-free native fixture and retains bounded JSON evidence.
 
 The native ChatGPT fixture suite requires an explicit test-only feature and an
 isolated target directory:

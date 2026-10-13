@@ -6,6 +6,7 @@ $repositoryRoot = Split-Path -Parent $PSScriptRoot
 Push-Location $repositoryRoot
 try {
     & (Join-Path $PSScriptRoot 'build-windows-gui.ps1')
+    & (Join-Path $PSScriptRoot 'test-windows-process-capture.ps1')
     $guiExe = Join-Path $repositoryRoot 'target/windows-gui/Assemblywright.exe'
     $unitEvidence = Join-Path $repositoryRoot 'target/windows-gui/gui-unit-tests.json'
     $selfTest = Start-Process -FilePath $guiExe -ArgumentList @('--self-test', ('"' + $unitEvidence + '"')) -WindowStyle Hidden -PassThru -Wait
