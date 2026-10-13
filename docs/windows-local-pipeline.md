@@ -1088,7 +1088,7 @@ v2 records warm-up, baseline/final and negative-control diagnostics before a
 failure is raised, and incomplete checks remain unconfirmed. The production
 helper and installed GUI bytes are unchanged by this measurement correction.
 
-Final fixture SHA-256
+The `b2a421c` fixture checkpoint's local SHA-256
 `38c83fdf6e1e3d72ee24cb451a093ca45cc5e2490d49aa01cfb380070493cc6b`
 passed a normal run, two constrained single-CPU runs and the parent's native
 Windows PowerShell rerun. The parent recorded 455 handles / 46 threads before
@@ -1098,7 +1098,27 @@ after disposal. Proof is retained as
 `process-capture-highwater-singlecpu-run*.json`. An injected failure retained
 its diagnostics with null actual results and an empty assertions array in
 `process-capture-injected-failure-final.json`. Independent high-risk review
-approved the exact final fixture, evidence and docs.
+approved that fixture checkpoint, evidence and docs.
+
+Its next hosted gate retained samples `439:48,449:50,484:57,484:57,484:57`
+(handles:threads). The final three readings were identical, but the warm-up
+incorrectly reset the no-new-peak count while waiting for the recent range to
+narrow. It then reached the four-window cap with only one counted stable window.
+The source correction counts no-new-peak windows independently and requires
+both that count and the recent-range bound before accepting a baseline. The
+four-window cap, actual-last-sample baseline, measured 32-handle bound and
+retained-handle control remain unchanged. A deterministic regression replays
+the exact hosted samples and rejects ongoing growth and unbounded variation.
+The normal Windows PowerShell native rerun and inherited single-CPU rerun both
+passed with the shared decision logic. They retained the original measurement
+and negative-control checks; proof is under
+`target/publication/process-capture-offbyone-*.json`.
+The parent independently passed the final native gate with 451 handles / 45
+threads unchanged across the measured captures; the 33 retained handles were
+rejected and released. Its exact fixture SHA-256 is
+`6d3d61a0c1989965ac920e5a19c4720dd62e4d9bb6fdcdbf1d33b0d67fc38244`,
+retained in `target/publication/parent-capture-offbyone.json`. Independent
+high-risk review approved the correction.
 
 The intervening saved reviewer `gpt-6.1-sol/medium` returned `READY` through an
 actual response-only call on this installation; its selection was preserved.

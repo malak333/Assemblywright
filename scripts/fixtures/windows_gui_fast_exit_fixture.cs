@@ -22,6 +22,67 @@ namespace Assemblywright.Windows
             internal int Threads;
         }
 
+        private sealed class RuntimeStabilizationState
+        {
+            private readonly RuntimeSample[] recent = new RuntimeSample[RequiredStableWindows + 1];
+            private int recentCount;
+            private int peakHandles;
+            private int peakThreads;
+            private int windowsWithoutNewPeak;
+
+            internal RuntimeStabilizationState(RuntimeSample initial)
+            {
+                peakHandles = initial.Handles;
+                peakThreads = initial.Threads;
+                AddRecent(initial);
+            }
+
+            internal bool Observe(RuntimeSample current)
+            {
+                bool establishedNewPeak = current.Handles > peakHandles || current.Threads > peakThreads;
+                peakHandles = Math.Max(peakHandles, current.Handles);
+                peakThreads = Math.Max(peakThreads, current.Threads);
+                if (establishedNewPeak) windowsWithoutNewPeak = 0;
+                else windowsWithoutNewPeak++;
+                AddRecent(current);
+                return IsStable;
+            }
+
+            internal bool IsStable
+            {
+                get { return windowsWithoutNewPeak >= RequiredStableWindows && RecentRangeIsBounded(); }
+            }
+
+            private void AddRecent(RuntimeSample sample)
+            {
+                if (recentCount < recent.Length)
+                {
+                    recent[recentCount++] = sample;
+                    return;
+                }
+                for (int index = 1; index < recent.Length; index++) recent[index - 1] = recent[index];
+                recent[recent.Length - 1] = sample;
+            }
+
+            private bool RecentRangeIsBounded()
+            {
+                if (recentCount < recent.Length) return false;
+                int minimumHandles = recent[0].Handles;
+                int maximumHandles = recent[0].Handles;
+                int minimumThreads = recent[0].Threads;
+                int maximumThreads = recent[0].Threads;
+                for (int index = 1; index < recentCount; index++)
+                {
+                    minimumHandles = Math.Min(minimumHandles, recent[index].Handles);
+                    maximumHandles = Math.Max(maximumHandles, recent[index].Handles);
+                    minimumThreads = Math.Min(minimumThreads, recent[index].Threads);
+                    maximumThreads = Math.Max(maximumThreads, recent[index].Threads);
+                }
+                return maximumHandles - minimumHandles <= HandleTolerance
+                    && maximumThreads - minimumThreads <= ChildrenPerRound / 2;
+            }
+        }
+
         private static int Main(string[] arguments)
         {
             try
@@ -60,6 +121,7 @@ namespace Assemblywright.Windows
 
         private static void RunHarness()
         {
+            VerifyStabilizationDecisionLogic();
             string executable;
             using (Process current = Process.GetCurrentProcess()) executable = current.MainModule.FileName;
             string childExecutable = Path.Combine(Path.GetDirectoryName(executable), "fast-exit-child-" + Guid.NewGuid().ToString("N") + ".exe");
@@ -149,11 +211,9 @@ namespace Assemblywright.Windows
         {
             RuntimeSample[] observed = new RuntimeSample[MaximumStabilizationWindows + 1];
             int count = 0;
-            int stableWindows = 0;
             observed[count++] = CaptureRuntimeSample();
-            int peakHandles = observed[0].Handles;
-            int peakThreads = observed[0].Threads;
-            for (int window = 0; window < MaximumStabilizationWindows && stableWindows < RequiredStableWindows; window++)
+            RuntimeStabilizationState state = new RuntimeStabilizationState(observed[0]);
+            for (int window = 0; window < MaximumStabilizationWindows && !state.IsStable; window++)
             {
                 int successes = 0;
                 int failures = 0;
@@ -169,15 +229,11 @@ namespace Assemblywright.Windows
                     "A runtime stabilization window did not validate every child.");
                 RuntimeSample current = CaptureRuntimeSample();
                 observed[count++] = current;
-                bool establishedNewPeak = current.Handles > peakHandles || current.Threads > peakThreads;
-                peakHandles = Math.Max(peakHandles, current.Handles);
-                peakThreads = Math.Max(peakThreads, current.Threads);
-                if (!establishedNewPeak && RecentRuntimeRangeIsBounded(observed, count)) stableWindows++;
-                else stableWindows = 0;
+                state.Observe(current);
             }
             samples = new RuntimeSample[count];
             Array.Copy(observed, samples, count);
-            if (stableWindows < RequiredStableWindows)
+            if (!state.IsStable)
             {
                 Console.Out.WriteLine("DIAGNOSTICS stabilization=" + FormatSamples(samples) + " stabilization_failed=true");
                 throw new InvalidOperationException("The CLR and ThreadPool did not stabilize within the bounded fixture warmup.");
@@ -185,24 +241,38 @@ namespace Assemblywright.Windows
             return samples[count - 1];
         }
 
-        private static bool RecentRuntimeRangeIsBounded(RuntimeSample[] samples, int count)
+        private static void VerifyStabilizationDecisionLogic()
         {
-            const int rangeSamples = RequiredStableWindows + 1;
-            if (count < rangeSamples) return false;
-            int first = count - rangeSamples;
-            int minimumHandles = samples[first].Handles;
-            int maximumHandles = samples[first].Handles;
-            int minimumThreads = samples[first].Threads;
-            int maximumThreads = samples[first].Threads;
-            for (int index = first + 1; index < count; index++)
+            RuntimeSample[] hosted = new RuntimeSample[] {
+                Sample(439, 48), Sample(449, 50), Sample(484, 57), Sample(484, 57), Sample(484, 57)
+            };
+            Require(FirstStableWindow(hosted) == 4, "The hosted runtime sequence did not stabilize on its fourth window.");
+            RuntimeSample[] persistentGrowth = new RuntimeSample[] {
+                Sample(100, 10), Sample(101, 10), Sample(102, 10), Sample(103, 10), Sample(104, 10)
+            };
+            Require(FirstStableWindow(persistentGrowth) == -1, "Persistent handle growth was accepted as stabilization.");
+            RuntimeSample[] unboundedRange = new RuntimeSample[] {
+                Sample(200, 20), Sample(100, 10), Sample(160, 16), Sample(100, 10), Sample(160, 16)
+            };
+            Require(FirstStableWindow(unboundedRange) == -1, "An unbounded recent runtime range was accepted as stabilization.");
+        }
+
+        private static int FirstStableWindow(RuntimeSample[] samples)
+        {
+            RuntimeStabilizationState state = new RuntimeStabilizationState(samples[0]);
+            for (int index = 1; index < samples.Length; index++)
             {
-                minimumHandles = Math.Min(minimumHandles, samples[index].Handles);
-                maximumHandles = Math.Max(maximumHandles, samples[index].Handles);
-                minimumThreads = Math.Min(minimumThreads, samples[index].Threads);
-                maximumThreads = Math.Max(maximumThreads, samples[index].Threads);
+                if (state.Observe(samples[index])) return index;
             }
-            return maximumHandles - minimumHandles <= HandleTolerance
-                && maximumThreads - minimumThreads <= ChildrenPerRound / 2;
+            return -1;
+        }
+
+        private static RuntimeSample Sample(int handles, int threads)
+        {
+            RuntimeSample sample = new RuntimeSample();
+            sample.Handles = handles;
+            sample.Threads = threads;
+            return sample;
         }
 
         private static RuntimeSample CaptureRuntimeSample()

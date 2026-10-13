@@ -451,6 +451,12 @@ These notes capture durable facts for future agents working on this repository.
   and recovers after disposal. Record warm-up and final samples rather than
   increasing the tolerance to accommodate a machine. Failed fixture evidence
   must mark incomplete checks as unconfirmed.
+- Count no-new-peak windows independently from recent-range readiness in a
+  bounded stabilization probe. The hosted sequence
+  `439:48,449:50,484:57,484:57,484:57` ended with three identical samples, but
+  combining both conditions in the counter rejected it at the four-window cap.
+  Require both conditions for acceptance and replay that exact sequence, plus
+  ongoing growth and unbounded variation, through the shared decision logic.
 - Model availability can change while the cached catalog and executable remain
   the same. The later saved GPT-6.1-Sol/medium selection returned READY through
   a real response-only probe on 2026-10-13. Retain the earlier account rejection
