@@ -1107,7 +1107,8 @@ narrow. It then reached the four-window cap with only one counted stable window.
 The source correction counts no-new-peak windows independently and requires
 both that count and the recent-range bound before accepting a baseline. The
 four-window cap, actual-last-sample baseline, measured 32-handle bound and
-retained-handle control remain unchanged. A deterministic regression replays
+retained-handle control were unchanged at that checkpoint. A deterministic
+regression replays
 the exact hosted samples and rejects ongoing growth and unbounded variation.
 The normal Windows PowerShell native rerun and inherited single-CPU rerun both
 passed with the shared decision logic. They retained the original measurement
@@ -1187,3 +1188,42 @@ PowerShell 7 passed the same functional journey as
 parsed under both shells and exercised by the exact Windows PowerShell rerun.
 The production GUI digest remains `f6c4d697b0f8bd0932131b582e299ade1488f58bdbc47ee3a9ba50d426c9fb0d`.
 Independent high-risk review approved the final harness, evidence and docs.
+
+### Later hosted callback-pool warm-up
+
+The `c59cdb4` hosted capture fixture exhausted its four-window warm-up with
+samples `449:50,449:50,459:52,459:52,469:54` (handles:threads). It retained
+failed status, null measured results and an empty assertions array; the
+320-child measurement and GUI journey had not started. The exact failed log
+and bounded JSON remain under `target/publication/capture-final-c59-failure.log`
+and `hosted-windows-local-c59-failure/`.
+
+The fixture had primed thirty-two workers for sixteen concurrent captures,
+which can queue stdout, stderr, exit and completion callbacks. Its preparation
+now queues and drains at least sixty-four workers before measuring. Warm-up
+allows at most eight full workload windows and a hard ninety-second deadline,
+including remaining-time checks within each batch wait. The shared decision
+regression keeps the observed four-window prefix unaccepted, accepts a later
+two-window plateau, and rejects alternating continued growth through the cap.
+
+The measured 320 children, exact output and exit checks, 32-handle bound,
+33-retained-handle rejection/recovery, actual-last-sample baseline and truthful
+failed evidence remain. Production capture code and installed GUI bytes are
+unchanged; this adjusts fixture preparation and bounded measurement only.
+
+The final local fixture SHA-256 is
+`028f23085fca5297c7137c762fce00ea62e5abe3803ad9757793492738b18e7f`.
+Exact-source normal and single-CPU runs passed all eight assertions, retaining
+612 / 612 and 634 / 634 baseline/final handles. Their deliberate controls
+rejected 613 -> 646 and 635 -> 668 handles, then recovered after disposal.
+A forced 100 ms deadline probe exited 1 with a retained warm-up sample and no
+PASS result. Proof is retained as
+`target/publication/process-capture-c59-frozen-{normal,singlecpu}.{log,json}`
+and `process-capture-c59-frozen-deadline-negative.log`.
+
+The parent independently passed the exact final native fixture with 617 / 617
+handles, rejected 618 -> 651 and recovered to 618. Its proof is
+`target/publication/parent-callback-capture-final.{log,json}`. Independent
+high-risk review approved the final fixture and deadline checks; the production
+helper remains unchanged at SHA-256
+`9c46c60e490de9f0defa39b3d0e7655bcfddb7237095eda81e294b774b46398c`.

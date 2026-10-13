@@ -96,6 +96,12 @@ handles to prove rejection, then proves recovery after disposal. Schema v2
 evidence retains warm-up, baseline/final and negative-control samples even when
 the harness fails; an incomplete failed run does not claim passed assertions.
 This adjusts test measurement only; the installed production helper is unchanged.
+The current fixture primes at least sixty-four workers for sixteen concurrent
+captures and bounds stabilization to eight full windows and ninety seconds,
+with the remaining deadline enforced within each batch wait. Shared decision
+regressions reject the hosted growing prefix and alternating continued growth,
+then accept its later plateau. The earlier four-window checkpoint and its
+failed hosted evidence remain separately recorded in the pipeline closeout.
 
 The corrected current native journey is
 `5f887284abdd4eb182667109ca93425f`; its submitted demo job and twelve-test

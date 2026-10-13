@@ -13,7 +13,9 @@ namespace Assemblywright.Windows
         private const int ChildrenPerRound = 16;
         private const int HandleTolerance = 32;
         private const int StabilizationRounds = Rounds;
-        private const int MaximumStabilizationWindows = 4;
+        private const int ProcessWorkersPerChild = 4;
+        private const int MaximumStabilizationWindows = 8;
+        private const int MaximumStabilizationMilliseconds = 90000;
         private const int RequiredStableWindows = 2;
 
         private sealed class RuntimeSample
@@ -180,7 +182,9 @@ namespace Assemblywright.Windows
 
         private static void PrimeThreadPool(int originalMinimumWorkers, int originalMinimumIo)
         {
-            int target = Math.Max(ChildrenPerRound * 2, originalMinimumWorkers);
+            // Each concurrent capture can need stdout, stderr, exit-signal, and
+            // completion-continuation work before its Process is disposed.
+            int target = Math.Max(ChildrenPerRound * ProcessWorkersPerChild, originalMinimumWorkers);
             Require(
                 ThreadPool.SetMinThreads(target, Math.Max(ChildrenPerRound * 2, originalMinimumIo)),
                 "The fixture could not set its temporary ThreadPool minimums.");
@@ -213,16 +217,34 @@ namespace Assemblywright.Windows
             int count = 0;
             observed[count++] = CaptureRuntimeSample();
             RuntimeStabilizationState state = new RuntimeStabilizationState(observed[0]);
-            for (int window = 0; window < MaximumStabilizationWindows && !state.IsStable; window++)
+            Stopwatch elapsed = Stopwatch.StartNew();
+            for (int window = 0;
+                window < MaximumStabilizationWindows
+                    && elapsed.ElapsedMilliseconds < MaximumStabilizationMilliseconds
+                    && !state.IsStable;
+                window++)
             {
                 int successes = 0;
                 int failures = 0;
-                RunCaptureBatches(
-                    executable,
-                    10000 + window * StabilizationRounds * ChildrenPerRound,
-                    StabilizationRounds,
-                    ref successes,
-                    ref failures);
+                try
+                {
+                    RunCaptureBatches(
+                        executable,
+                        10000 + window * StabilizationRounds * ChildrenPerRound,
+                        StabilizationRounds,
+                        ref successes,
+                        ref failures,
+                        elapsed,
+                        MaximumStabilizationMilliseconds);
+                }
+                catch (TimeoutException exception)
+                {
+                    samples = CopySamples(observed, count);
+                    Console.Out.WriteLine("DIAGNOSTICS stabilization=" + FormatSamples(samples) + " stabilization_failed=true");
+                    throw new InvalidOperationException(
+                        "The CLR and ThreadPool did not stabilize within the bounded fixture warmup.",
+                        exception);
+                }
                 Require(
                     successes == StabilizationRounds * ChildrenPerRound / 2
                         && failures == StabilizationRounds * ChildrenPerRound / 2,
@@ -231,9 +253,8 @@ namespace Assemblywright.Windows
                 observed[count++] = current;
                 state.Observe(current);
             }
-            samples = new RuntimeSample[count];
-            Array.Copy(observed, samples, count);
-            if (!state.IsStable)
+            samples = CopySamples(observed, count);
+            if (!state.IsStable || elapsed.ElapsedMilliseconds > MaximumStabilizationMilliseconds)
             {
                 Console.Out.WriteLine("DIAGNOSTICS stabilization=" + FormatSamples(samples) + " stabilization_failed=true");
                 throw new InvalidOperationException("The CLR and ThreadPool did not stabilize within the bounded fixture warmup.");
@@ -241,16 +262,41 @@ namespace Assemblywright.Windows
             return samples[count - 1];
         }
 
+        private static RuntimeSample[] CopySamples(RuntimeSample[] observed, int count)
+        {
+            RuntimeSample[] samples = new RuntimeSample[count];
+            Array.Copy(observed, samples, count);
+            return samples;
+        }
+
         private static void VerifyStabilizationDecisionLogic()
         {
-            RuntimeSample[] hosted = new RuntimeSample[] {
+            RuntimeSample[] hostedRangeConvergence = new RuntimeSample[] {
                 Sample(439, 48), Sample(449, 50), Sample(484, 57), Sample(484, 57), Sample(484, 57)
             };
-            Require(FirstStableWindow(hosted) == 4, "The hosted runtime sequence did not stabilize on its fourth window.");
+            Require(
+                FirstStableWindow(hostedRangeConvergence) == 4,
+                "The hosted range sequence did not stabilize on its fourth window.");
+            RuntimeSample[] hostedLateConvergence = new RuntimeSample[] {
+                Sample(449, 50), Sample(449, 50), Sample(459, 52), Sample(459, 52),
+                Sample(469, 54), Sample(469, 54), Sample(469, 54)
+            };
+            Require(
+                FirstStableWindow(hostedLateConvergence) == 6,
+                "The late hosted runtime sequence did not stabilize after two post-peak windows.");
+            RuntimeSample[] continuedHostedGrowth = new RuntimeSample[] {
+                Sample(449, 50), Sample(449, 50), Sample(459, 52), Sample(459, 52),
+                Sample(469, 54), Sample(469, 54), Sample(479, 56), Sample(479, 56), Sample(489, 58)
+            };
+            Require(
+                FirstStableWindow(continuedHostedGrowth) == -1,
+                "Continued late ThreadPool growth was accepted as stabilization.");
             RuntimeSample[] persistentGrowth = new RuntimeSample[] {
                 Sample(100, 10), Sample(101, 10), Sample(102, 10), Sample(103, 10), Sample(104, 10)
             };
-            Require(FirstStableWindow(persistentGrowth) == -1, "Persistent handle growth was accepted as stabilization.");
+            Require(
+                FirstStableWindow(persistentGrowth) == -1,
+                "Persistent handle growth was accepted as stabilization.");
             RuntimeSample[] unboundedRange = new RuntimeSample[] {
                 Sample(200, 20), Sample(100, 10), Sample(160, 16), Sample(100, 10), Sample(160, 16)
             };
@@ -260,7 +306,7 @@ namespace Assemblywright.Windows
         private static int FirstStableWindow(RuntimeSample[] samples)
         {
             RuntimeStabilizationState state = new RuntimeStabilizationState(samples[0]);
-            for (int index = 1; index < samples.Length; index++)
+            for (int index = 1; index < samples.Length && index <= MaximumStabilizationWindows; index++)
             {
                 if (state.Observe(samples[index])) return index;
             }
@@ -350,8 +396,30 @@ namespace Assemblywright.Windows
 
         private static void RunCaptureBatches(string executable, int firstSequence, int rounds, ref int successes, ref int failures)
         {
+            RunCaptureBatches(executable, firstSequence, rounds, ref successes, ref failures, null, 0);
+        }
+
+        private static void RunCaptureBatches(
+            string executable,
+            int firstSequence,
+            int rounds,
+            ref int successes,
+            ref int failures,
+            Stopwatch deadlineClock,
+            int deadlineMilliseconds)
+        {
             for (int round = 0; round < rounds; round++)
             {
+                int waitMilliseconds = 15000;
+                if (deadlineClock != null)
+                {
+                    long remaining = deadlineMilliseconds - deadlineClock.ElapsedMilliseconds;
+                    if (remaining < 15000)
+                    {
+                        throw new TimeoutException(
+                            "The runtime stabilization deadline cannot admit another bounded capture batch.");
+                    }
+                }
                 Task<ProcessResult>[] captures = new Task<ProcessResult>[ChildrenPerRound];
                 string[] markers = new string[ChildrenPerRound];
                 int[] exitCodes = new int[ChildrenPerRound];
@@ -369,7 +437,23 @@ namespace Assemblywright.Windows
                         new string[] { "--child", marker, exitCode.ToString(System.Globalization.CultureInfo.InvariantCulture), lineMode });
                     waits[child] = captures[child];
                 }
-                Require(Task.WaitAll(waits, 15000), "A fast-exit capture did not complete within 15 seconds.");
+                if (deadlineClock != null)
+                {
+                    long remaining = deadlineMilliseconds - deadlineClock.ElapsedMilliseconds;
+                    waitMilliseconds = (int)Math.Max(0, Math.Min(waitMilliseconds, remaining));
+                }
+                bool completed = Task.WaitAll(waits, waitMilliseconds);
+                bool deadlineExpired = deadlineClock != null
+                    && deadlineClock.ElapsedMilliseconds >= deadlineMilliseconds;
+                if (!completed && deadlineExpired)
+                {
+                    throw new TimeoutException("The runtime stabilization deadline expired during a capture batch.");
+                }
+                Require(completed, "A fast-exit capture did not complete within 15 seconds.");
+                if (deadlineExpired)
+                {
+                    throw new TimeoutException("The runtime stabilization deadline expired during process launch.");
+                }
                 for (int child = 0; child < ChildrenPerRound; child++)
                 {
                     ProcessResult result = captures[child].GetAwaiter().GetResult();

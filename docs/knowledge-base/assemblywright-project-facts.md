@@ -466,6 +466,13 @@ These notes capture durable facts for future agents working on this repository.
   read or mutate the repository, sleep or spawn those children. Require explicit
   exact helper selection and an isolated candidate before effects; retain the
   parent-process tests and truthful helper-only proof boundaries.
+- A sixteen-process capture burst can queue stdout, stderr, exit and completion
+  callbacks; priming only thirty-two workers still allowed late hosted pool
+  growth. Prepare at least sixty-four actual queued workers before measuring,
+  preserve the 32-handle leak bound and 33-handle negative control, and enforce
+  both the eight-window cap and ninety-second deadline inside batch waits.
+  Retain growing warm-up samples as failed/unmeasured evidence rather than
+  increasing the leak tolerance or using a historical high-water baseline.
 - Native UIA window exposure is not application initialization proof. For a
   retained queue restart, wait for the restored terminal status and enabled
   Start control; then prove admission of the exact pending entry separately
