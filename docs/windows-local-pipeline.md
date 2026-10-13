@@ -1008,3 +1008,69 @@ The reviewed source corrections are committed as
 closeout records the actual deployment and live proof before publishing the
 final branch head. The installed runtime inputs are unchanged from those
 reviewed source bytes.
+
+### Final hosted portability and fixture-startup corrections
+
+The next macOS clippy run exposed the same Windows-only result binding in the
+GitHub adapter's cleanup function. It now binds that result only on Windows and
+still calls termination exactly once on other platforms, without suppressing
+warnings. All three local modules were checked for the pattern. Windows behavior
+is unchanged; eight GitHub units, twenty-five native E2E cases, focused clippy,
+formatting and the default build passed again. The rebuilt adapter SHA-256 is
+`b6d87dd81c8eeb75bb92209f3bcc5b0da9cf90e45b9f27f443420ab35fac70c7`.
+It was installed while idle and independently verified the actual run's
+succeeded status and receipt revision 54. The other three installed digests are
+unchanged. The successful full automatic run above used the earlier adapter
+digest; its retained record is not relabeled as a new execution.
+
+The hosted GUI fixture also exposed an empty-file startup race: file existence
+preceded Python's port write, so the test called Trim on null content. The
+fixture now publishes its complete ASCII port through same-directory atomic
+replacement. The consumer waits for a parsed port in 1..65535, detects early
+fixture exit and keeps the original thirty-second bound. No product behavior
+or acceptance assertion was removed. Both small corrections passed independent
+high-risk review.
+
+The full GUI journey then passed under PowerShell 7, including all twelve
+packaged-demo acceptance tests. That rerun exposed a test-host path difference:
+PowerShell 7 treats the `?` in Rust's canonical `\\?\` path as a wildcard in
+Start-Process WorkingDirectory. Validation now derives an ordinary path from
+the retained run, checks the report against it, and uses that ordinary path for
+the child. Existing 8.3 aliases are expanded before comparison because hosted
+TEMP can use `RUNNER~1` while Rust reports `runneradmin`. A native probe proved
+short/long alias equality and rejection of a different existing directory. The
+exact candidate assertion, all acceptance tests and production code are intact;
+the path correction also passed independent high-risk review.
+
+The final full Windows PowerShell UIA journey passed as well, retaining
+`target/windows-gui-tests/1affb4ab87ef4cf3abde036eba1a246d/gui-e2e.json` and
+all twelve actual demo acceptance tests. The native 8.3 probe is retained as
+`target/publication/gui-long-path-proof.json`; this installation's TEMP itself
+has no short alias, so that alias proof uses the existing repository path.
+
+The next distributed hosted gate passed its corrected native Developer workflow
+in 1,217 seconds, then reached additional passing master cases before GitHub
+cancelled the whole job at thirty-five minutes. No test failure preceded that
+outer deadline. Its complete log is retained as
+`target/publication/windows-distributed-timeout.log`. The job now has a bounded
+sixty-minute budget, pinned by the CI contract; every test command, fixture
+deadline and failure check is unchanged. Final merge still requires all four
+hosted gates on the exact final head.
+The source adapter, configuration fixture and publication controller all pin
+the updated workflow's canonical LF SHA-256
+`a865984156057ad6c0443d29008a1feeaf37796cb06429b0e9e68f7ecb12e7c6`.
+The deployed distributed service and its configuration were not modified.
+Independent review also caught the distributed publication controller's former
+forty-five-minute action deadline, which could expire before a valid longer
+hosted gate. Its source deadline now covers one hundred minutes: the longest
+pinned gate is the existing ninety-minute Mac release job, plus ten minutes for
+scheduling and final reads. Each publication action gets a fresh control. The
+configured-workflow budget regression, cancellation, lost-authority and expired
+deadline tests protect the relationship without disabling a failure check.
+
+The intervening saved reviewer `gpt-6.1-sol/medium` returned `READY` through an
+actual response-only call on this installation; its selection was preserved.
+Current successful availability does not erase an earlier account rejection or
+make cached catalog visibility sufficient inference proof. That bounded probe
+is retained under `target/publication/saved-reviewer-probe-*` and had no queue,
+repository or publication authority.

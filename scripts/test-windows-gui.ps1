@@ -16,6 +16,15 @@ using System.Runtime.InteropServices;
 public static class AssemblywrightGuiNativeTest {
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     public static extern IntPtr SendMessage(IntPtr window, uint message, IntPtr parameter, string text);
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true, EntryPoint = "GetLongPathNameW")]
+    private static extern uint GetLongPathName(string path, System.Text.StringBuilder buffer, uint size);
+    public static string LongPath(string path) {
+        var buffer = new System.Text.StringBuilder(32768);
+        uint length = GetLongPathName(path, buffer, (uint)buffer.Capacity);
+        if (length == 0) throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
+        if (length >= buffer.Capacity) throw new System.IO.PathTooLongException("The GUI test candidate path exceeded the Windows path limit.");
+        return buffer.ToString();
+    }
 }
 '@
 $utf8 = New-Object System.Text.UTF8Encoding($false)
@@ -306,8 +315,15 @@ try {
         ('"' + $fakeModel + '"'), '--port-file', ('"' + $portFile + '"'),
         '--requests-file', ('"' + $requestsFile + '"')
     ) -WindowStyle Hidden -PassThru
-    Wait-Until { Test-Path -LiteralPath $portFile } 'The loopback inference fixture did not start.' | Out-Null
-    $port = (Get-Content -LiteralPath $portFile -Raw).Trim()
+    $port = Wait-Until {
+        if ($modelProcess.HasExited) { throw 'The loopback inference fixture exited before publishing its port.' }
+        try {
+            $portText = [System.IO.File]::ReadAllText($portFile).Trim()
+            $parsedPort = 0
+            if ([int]::TryParse($portText, [ref]$parsedPort) -and $parsedPort -gt 0 -and $parsedPort -le 65535) { return $parsedPort }
+        } catch [System.IO.IOException] { }
+        return $null
+    } 'The loopback inference fixture did not publish a valid port.'
     $source = Join-Path $testRoot 'fixture with spaces'
     New-Item -ItemType Directory -Path $source -Force | Out-Null
     Write-Utf8File (Join-Path $source '.gitignore') "__pycache__/`n"
@@ -846,7 +862,15 @@ try {
         }
         $acceptanceStdout = Join-Path $testRoot 'demo-acceptance.stdout.log'
         $acceptanceStderr = Join-Path $testRoot 'demo-acceptance.stderr.log'
-        $acceptanceProcess = Start-Process -FilePath $python -ArgumentList @('-m', 'unittest', 'discover', '-s', 'tests', '-v') -WorkingDirectory $extendedFixtureReport.candidate -WindowStyle Hidden -RedirectStandardOutput $acceptanceStdout -RedirectStandardError $acceptanceStderr -PassThru -Wait
+        $acceptanceCandidate = Join-Path (Join-Path $liveState ('runs/' + $extendedFixtureReport.run_id)) 'candidate'
+        $reportedCandidate = $extendedFixtureReport.candidate
+        if ($reportedCandidate.StartsWith('\\?\', [System.StringComparison]::Ordinal)) { $reportedCandidate = $reportedCandidate.Substring(4) }
+        $reportedLongPath = [AssemblywrightGuiNativeTest]::LongPath([System.IO.Path]::GetFullPath($reportedCandidate))
+        $expectedLongPath = [AssemblywrightGuiNativeTest]::LongPath([System.IO.Path]::GetFullPath($acceptanceCandidate))
+        if (-not $reportedLongPath.Equals($expectedLongPath, [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw 'The demo report candidate did not match its retained run directory.'
+        }
+        $acceptanceProcess = Start-Process -FilePath $python -ArgumentList @('-m', 'unittest', 'discover', '-s', 'tests', '-v') -WorkingDirectory $acceptanceCandidate -WindowStyle Hidden -RedirectStandardOutput $acceptanceStdout -RedirectStandardError $acceptanceStderr -PassThru -Wait
         $acceptanceOutput = [System.IO.File]::ReadAllText($acceptanceStdout, $utf8) + [System.IO.File]::ReadAllText($acceptanceStderr, $utf8)
         if ($acceptanceProcess.ExitCode -ne 0 -or $acceptanceOutput -notmatch 'Ran 12 tests') {
             throw 'The completed demo candidate did not pass all twelve acceptance tests at the real process boundary.'

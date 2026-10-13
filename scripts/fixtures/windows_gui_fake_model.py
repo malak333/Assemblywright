@@ -69,7 +69,9 @@ def main():
             pass
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), ModelHandler)
-    args.port_file.write_text(str(server.server_port), encoding="ascii")
+    temporary_port = args.port_file.with_name(args.port_file.name + ".tmp")
+    temporary_port.write_text(str(server.server_port), encoding="ascii")
+    temporary_port.replace(args.port_file)
     server.serve_forever()
 
 

@@ -1436,6 +1436,17 @@ rename/replacement revalidation, held-handle identity comparison, handle-relativ
 directory creation, and Job Object descendant reaping; macOS execution cannot prove
 those Win32 behaviors.
 
+The distributed job has a sixty-minute outer budget. A clean hosted Windows run
+spent about twenty minutes in the serial native Developer workflow alone and
+was stopped by the former thirty-five-minute job limit while later master tests
+were passing. Individual fixture deadlines and every test command remain in
+place; the outer budget permits the complete master, broker, executor and SCM
+suite to finish.
+The distributed publication action has a hundred-minute outer deadline,
+covering the longest pinned gate (the existing ninety-minute Mac release gate)
+plus ten minutes for scheduling and final reads. Each action receives a fresh
+control; current authority, cancellation and per-command checks remain active.
+
 Use the workflow's package-scoped protocol, master, broker, and executor clippy commands on
 Windows. Do not substitute the macOS/Linux workspace-wide clippy command: the
 workspace also contains Unix-only local transport targets, so that substitution

@@ -45,7 +45,7 @@ const WINDOWS_WORKFLOW_PATH: &str = ".github/workflows/windows-protocol.yml";
 const RELEASE_LOCAL_WORKFLOW_SHA256: &str =
     "51e809a94f59193e213bdff6e49f3a86e612643f094e366055f42f8745026fd7";
 const WINDOWS_WORKFLOW_SHA256: &str =
-    "4284a27f06f7808179665e3ac0cbd90081e358a6c09b82d188ec6d414652b207";
+    "a865984156057ad6c0443d29008a1feeaf37796cb06429b0e9e68f7ecb12e7c6";
 const MAX_CONFIG_BYTES: usize = 16 * 1024;
 const MAX_GH_OUTPUT_BYTES: usize = 512 * 1024;
 const COMMAND_POLL_INTERVAL: Duration = Duration::from_millis(25);
@@ -53,7 +53,7 @@ const CHECK_POLL_INTERVAL: Duration = Duration::from_secs(5);
 const RECONCILE_POLL_INTERVAL: Duration = Duration::from_secs(2);
 /// Hosted checks may run substantially longer than one local process launch;
 /// current authority and cancellation remain polled throughout this window.
-pub const GITHUB_PUBLICATION_ACTION_DEADLINE: Duration = Duration::from_secs(45 * 60);
+pub const GITHUB_PUBLICATION_ACTION_DEADLINE: Duration = Duration::from_secs(100 * 60);
 const FIXED_REMOTE: &str = "https://github.com/malak333/Assemblywright.git";
 #[cfg(windows)]
 const FIXED_GH_EXECUTABLE: &str = r"C:\Users\mike\AppData\Local\Microsoft\WinGet\Packages\GitHub.cli_Microsoft.Winget.Source_8wekyb3d8bbwe\bin\gh.exe";

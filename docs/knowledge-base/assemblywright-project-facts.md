@@ -416,6 +416,38 @@ These notes capture durable facts for future agents working on this repository.
   Keep that successful new run distinct from PR #4's explicit reconciliation
   and the retained failed dependency/path run. Exact runtime, source and hosted
   test proof is recorded in the Windows local-pipeline closeout.
+- A fixture readiness file must contain validated data before a dependent test
+  advances. Publish the loopback model's port atomically and wait for an integer
+  in 1..65535, with a bounded timeout and early child-exit detection. File
+  existence alone can expose an empty write window on a clean hosted runner.
+- PowerShell 7 can interpret the `?` in a Rust canonical `\\?\` candidate path
+  as a wildcard when starting acceptance validation. Derive the ordinary path
+  independently from the retained run directory, verify it against the report,
+  and use that ordinary path as the child working directory. Resolve existing
+  Windows 8.3 aliases with `GetLongPathNameW` before comparing paths: a hosted
+  runner can expose `RUNNER~1` through TEMP while Rust reports `runneradmin`.
+  Keep the exact candidate comparison and fail on native resolution errors.
+- Budget the hosted Windows distributed job for the complete serial suite. The
+  native Developer workflow alone took about twenty minutes; the former
+  thirty-five-minute job deadline cancelled later passing master tests. The
+  sixty-minute outer limit retains all test commands and individual fixture
+  deadlines. Distinguish job cancellation from a test assertion failure.
+- A hosted workflow's outer time budget must fit inside the publication
+  controller's per-action deadline, including scheduling and final read margin.
+  Check all pinned gates rather than only the workflow just changed. The
+  distributed action now allows one hundred minutes for the existing
+  ninety-minute Mac gate and sixty-minute Windows gate; cancellation, expired
+  deadline and lost-authority checks still fail closed. A regression reads the
+  actual pinned workflow budgets so future increases cannot silently outrun it.
+- Run the distributed publication proof controller with Windows PowerShell 5.1.
+  Its existing secured four-argument mutex constructor is unavailable in
+  PowerShell 7.6. The native 5.1 SelfTest passed; retain the separate compatibility
+  diagnostic instead of treating that optional probe as production GUI evidence.
+- Model availability can change while the cached catalog and executable remain
+  the same. The later saved GPT-6.1-Sol/medium selection returned READY through
+  a real response-only probe on 2026-10-13. Retain the earlier account rejection
+  as historical evidence; verify current inference and preserve saved choices
+  rather than treating an older result as permanent model availability.
 - The GUI-only C# ChatGPT fixture forwards non-ChatGPT commands to
   `assemblywright-local-real.exe`. That copy is used even though its filename
   appears only inside the fixture source. Trace fixture forwarding before

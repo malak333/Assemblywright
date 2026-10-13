@@ -2183,7 +2183,10 @@ async fn read_bounded<R: tokio::io::AsyncRead + Unpin>(
 }
 
 async fn terminate(child: &mut tokio::process::Child, job: &ExternalJob) {
+    #[cfg(windows)]
     let terminated = job.terminate().is_ok();
+    #[cfg(not(windows))]
+    let _ = job.terminate();
     #[cfg(windows)]
     if !terminated {
         if let Some(pid) = child.id() {
