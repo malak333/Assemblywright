@@ -49,6 +49,11 @@ removal of those steps. The existing macOS release and Windows distributed
 gates remain separate. Successful hosted fixture tests do not establish live
 provider entitlement or real model inference.
 
+For the owner's current Windows-only scope, publication requires production
+Windows, Windows-local and Windows distributed gates on the exact candidate.
+Mac application and Swift validation are deferred; the existing Mac workflow
+can run independently but is not this phase's acceptance gate.
+
 ## Gap assessment
 
 The pre-publication audit found hosted CI gaps for the WinForms/ChatGPT suites;
@@ -82,6 +87,12 @@ without merging. Authentication/authorization/server errors still stop after
 one read. Production polls every fifteen seconds and uses sixty-second
 exponential fallback delays; the validated fixture mode alone accelerates those
 timings. The existing twenty-minute deadline bounds both waits and commands.
+The alternating throttled/pending retry-cap case has a separate thirty-second
+fixture check budget and forty-five-second overall wall bound. Nine real check
+reads each inject 800 ms, so the test crosses the old ten-second observation
+budget while still proving exactly four retries, nine reads, attention and no
+merge. This isolates retry-cap semantics from hosted process-start contention;
+production and the distinct short pending-check deadline test are unchanged.
 
 Fast-exit response capture is a separate native cross-process regression in
 `test-windows-process-capture.ps1`, invoked by the full GUI gate. Both readers

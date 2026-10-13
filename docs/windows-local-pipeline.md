@@ -995,8 +995,8 @@ docs/CI/Codex workflow, actionlint and whitespace checks passed.
 
 Application source publication is tracked by
 [PR #444](https://github.com/malak333/Assemblywright/pull/444). Its normal
-merge must wait for every hosted application gate on the exact final branch
-head; this native/demo completion record does not substitute for those gates.
+merge must wait for the applicable Windows hosted gates on the exact final
+branch head; this native/demo completion record does not substitute for them.
 The managed publication checkout preserves the newer Mac code and excludes the
 original dirty checkout's unrelated certificate-rotation edits. The deployed
 Windows local lane is the verified portable bundle; the distributed master
@@ -1054,8 +1054,9 @@ cancelled the whole job at thirty-five minutes. No test failure preceded that
 outer deadline. Its complete log is retained as
 `target/publication/windows-distributed-timeout.log`. The job now has a bounded
 sixty-minute budget, pinned by the CI contract; every test command, fixture
-deadline and failure check is unchanged. Final merge still requires all four
-hosted gates on the exact final head.
+deadline and failure check is unchanged. Final merge requires the applicable
+Windows hosted gates on the exact final head, following the owner's later
+Windows-only scope clarification below.
 The source adapter, configuration fixture and publication controller all pin
 the updated workflow's canonical LF SHA-256
 `a865984156057ad6c0443d29008a1feeaf37796cb06429b0e9e68f7ecb12e7c6`.
@@ -1147,8 +1148,8 @@ formatting and whitespace checks passed. Proof is retained as
 `target/publication/windows-local-pipeline-full.log`,
 `windows-pipeline-broad-ignored.log`, `windows-local-pipeline-clippy.log` and
 `windows-local-pipeline-fmt.log`. The portable Mac inventory has twenty-eight
-default cases and five ignored helpers; its hosted execution is verified
-separately before source merge.
+default cases and five ignored helpers. Its hosted execution is separate from
+the Windows-only phase's acceptance and merge requirements.
 
 The intervening saved reviewer `gpt-6.1-sol/medium` returned `READY` through an
 actual response-only call on this installation; its selection was preserved.
@@ -1227,3 +1228,47 @@ handles, rejected 618 -> 651 and recovered to 618. Its proof is
 high-risk review approved the final fixture and deadline checks; the production
 helper remains unchanged at SHA-256
 `9c46c60e490de9f0defa39b3d0e7655bcfddb7237095eda81e294b774b46398c`.
+
+### GitHub retry-cap fixture timing under hosted concurrency
+
+Source `81eaac7` passed the full hosted GUI journey, including both explicit
+queue restarts and twelve demo acceptance checks. Its 320-child capture proof
+retained 619 / 614 baseline/final handles and rejected 615 -> 648 before
+recovering to 615. The Windows-local gate then passed twenty-four of twenty-five
+native GitHub cases but failed the alternating throttled/pending retry-cap case.
+The log and successful GUI/capture artifacts are retained under
+`target/publication/gui-final-81e-failure.log` and
+`hosted-windows-local-81e-failure/`.
+
+That retry-cap fixture allowed ten seconds for nine real PowerShell check
+commands plus three seconds of backoff and 0.4 seconds of polling. Hosted
+concurrency could exhaust its observation deadline before the ninth read.
+The single case now allows thirty seconds and injects 800 ms into each fake
+check read, deterministically crossing the old deadline. It still requires
+exactly four retries, nine reads, nonzero exit, attention status and no merge,
+with a forty-five-second wall bound including publication setup. Assertion
+diagnostics include elapsed time, observed reads and captured output.
+Production's twenty-minute deadline, cancellation and retry behavior and the
+separate short pending-check deadline test remain unchanged.
+
+The exact test file SHA-256 is
+`2ac72a025ff7cb851a895bf674d3170c888a5fefd233634af027a364bb3731fd`.
+Its focused delayed case passed in 18.01 seconds; all twenty-five native cases
+passed together in 27.60 seconds. Formatting, clippy with warnings denied and
+whitespace checks passed. Evidence is retained as
+`target/publication/windows-local-github-full-final.log`, and independent
+high-risk review approved the bounded test-only correction.
+The parent independently passed the exact delayed case in 17.94 seconds;
+`target/publication/parent-retry-budget-final.log` retains that native proof.
+
+### Owner's Windows-only scope clarification
+
+The owner clarified that this phase focuses on the Windows GUI and workflow,
+with nothing to do with the Mac application. Acceptance and source merge use
+the exact-head production Windows, Windows-local GUI/native and Windows
+distributed gates. Mac application/Swift work and remote control are deferred.
+The earlier Mac-derived icon and role-selection contracts remain references
+for Windows behavior; existing Mac source and workflows are preserved.
+Automatically triggered Mac CI is separate evidence and does not hold up this
+Windows phase. Documentation, knowledge, unit/native E2E, independent review,
+normal publication and installed Windows proof remain required.

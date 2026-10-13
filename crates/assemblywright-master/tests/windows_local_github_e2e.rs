@@ -1035,9 +1035,10 @@ fn repeated_required_check_throttling_stops_after_bounded_retries() {
 fn alternating_rate_limits_and_pending_checks_share_one_retry_cap() {
     let f = Fixture::new();
     let (state, id) = f.connected_completed_run();
-    let mut command = f.command_with_check_timeout(10_000);
+    let mut command = f.command_with_check_timeout(30_000);
     command
         .env("FIXTURE_CHECK_ALTERNATING_RATE_LIMIT", "1")
+        .env("FIXTURE_CHECK_DELAY_MILLISECONDS", "800")
         .args([
             "publish",
             "--state-dir",
@@ -1047,18 +1048,53 @@ fn alternating_rate_limits_and_pending_checks_share_one_retry_cap() {
             "--expected-revision",
             "1",
         ]);
+    let started = Instant::now();
     let output = command.output().unwrap();
-    assert!(!output.status.success());
-    assert!(String::from_utf8_lossy(&output.stdout).contains("after 4 bounded retries"));
-    assert_eq!(
-        fs::read_to_string(f.root.join("checks-count.txt"))
-            .unwrap()
-            .trim(),
-        "9"
+    let elapsed = started.elapsed();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let check_count = fs::read_to_string(f.root.join("checks-count.txt"))
+        .unwrap_or_else(|error| {
+            panic!(
+                "missing check count after {elapsed:?}: {error}; stdout={stdout}; stderr={stderr}"
+            )
+        })
+        .trim()
+        .parse::<u32>()
+        .unwrap_or_else(|error| {
+            panic!(
+                "invalid check count after {elapsed:?}: {error}; stdout={stdout}; stderr={stderr}"
+            )
+        });
+    assert!(
+        !output.status.success(),
+        "retry-cap fixture unexpectedly succeeded after {elapsed:?}; reads={check_count}; stdout={stdout}; stderr={stderr}"
     );
-    assert!(!f.root.join("merged.flag").exists());
+    assert!(
+        elapsed >= Duration::from_secs(10),
+        "delayed retry-cap fixture did not cross the old timing-sensitive 10-second budget: elapsed={elapsed:?}; reads={check_count}; stdout={stdout}; stderr={stderr}"
+    );
+    assert!(
+        elapsed < Duration::from_secs(45),
+        "retry-cap fixture exceeded its 30-second check budget and bounded publication-setup margin: elapsed={elapsed:?}; reads={check_count}; stdout={stdout}; stderr={stderr}"
+    );
+    assert!(
+        stdout.contains("after 4 bounded retries"),
+        "retry cap was not reported after {elapsed:?}; reads={check_count}; stdout={stdout}; stderr={stderr}"
+    );
+    assert_eq!(
+        check_count, 9,
+        "retry cap used an unexpected number of reads after {elapsed:?}; stdout={stdout}; stderr={stderr}"
+    );
+    assert!(
+        !f.root.join("merged.flag").exists(),
+        "retry-cap fixture merged after {elapsed:?}; reads={check_count}; stdout={stdout}; stderr={stderr}"
+    );
     let (_, status) = f.invoke(&["status", "--state-dir", &state]);
-    assert_eq!(status["publications"][&id]["status"], "attention");
+    assert_eq!(
+        status["publications"][&id]["status"], "attention",
+        "retry-cap fixture did not retain attention after {elapsed:?}; reads={check_count}; stdout={stdout}; stderr={stderr}"
+    );
 }
 
 #[test]
@@ -1719,6 +1755,7 @@ if ($args[0] -eq 'pr' -and $args[1] -eq 'list') {
 if ($args[0] -eq 'pr' -and $args[1] -eq 'checks') {
   if ($args -contains '--watch' -and $args -contains '--json') { [Console]::Error.WriteLine('cannot use `--watch` with `--json` flag'); exit 1 }
   $countPath = Join-Path $env:FIXTURE_DIR 'checks-count.txt'; $count = if (Test-Path $countPath) { [int](Get-Content $countPath) + 1 } else { 1 }; Set-Content -LiteralPath $countPath -Value $count -NoNewline
+  if ($env:FIXTURE_CHECK_DELAY_MILLISECONDS) { Start-Sleep -Milliseconds ([int]$env:FIXTURE_CHECK_DELAY_MILLISECONDS) }
   if ($env:FIXTURE_SLOW_CHECKS -eq '1') { Start-Sleep -Seconds 30 }
   if ($env:FIXTURE_CHECK_RATE_LIMIT_COUNT -and $count -le [int]$env:FIXTURE_CHECK_RATE_LIMIT_COUNT) {
     [Console]::Error.WriteLine('HTTP 429: secondary rate limit')

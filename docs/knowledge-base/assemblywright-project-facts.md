@@ -479,6 +479,18 @@ These notes capture durable facts for future agents working on this repository.
   from completion. Avoid fixed startup sleeps, preserve stopped-run identity,
   and retain bounded sanitized queue/report/UI failure state before cleanup.
   An old empty-log timeout cannot establish a product root cause by itself.
+- The owner clarified that the current phase is Windows GUI and workflow only.
+  Require production Windows, Windows-local GUI/native and Windows distributed
+  hosted gates on the exact candidate before normal merge. Preserve Mac source
+  and workflows, but defer Mac application/Swift validation and remote control;
+  automatically triggered Mac CI is separate evidence for this phase.
+- Keep a retry-cap fixture's timing budget distinct from deadline rejection.
+  Nine PowerShell check commands plus four backoffs can exceed ten seconds on a
+  loaded hosted runner. Use the bounded thirty-second fixture budget and 800 ms
+  per-read delay to cross that old boundary deterministically, while requiring
+  exact four retries, nine reads, attention, no merge and a forty-five-second
+  wall bound. Preserve production's twenty-minute deadline and its separate
+  short pending-check rejection test.
 - Model availability can change while the cached catalog and executable remain
   the same. The later saved GPT-6.1-Sol/medium selection returned READY through
   a real response-only probe on 2026-10-13. Retain the earlier account rejection

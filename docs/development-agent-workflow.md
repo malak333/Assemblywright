@@ -89,6 +89,13 @@ The owner's standing closeout instruction (2026-10-13) requires the applicable d
 
 Every feature or phase closes as one auditable slice. Before publication:
 
+The owner's Windows-only clarification (2026-10-13) scopes the current GUI and
+local workflow phase to the production Windows, Windows-local GUI/native and
+Windows distributed hosted gates on the exact candidate. Mac application and
+Swift validation are deferred and do not block this phase's merge. Existing
+Mac source and workflows remain intact; automatically triggered Mac CI is
+separate evidence, not Windows acceptance.
+
 1. Re-read the applicable accepted design, safety rules, requirements, and
    canonical build commands. Update implementation and documentation together;
    a stale or contradicted contract is blocking.
@@ -107,7 +114,9 @@ Every feature or phase closes as one auditable slice. Before publication:
    services, and Mac/Windows paths require native cross-process, packaged-app,
    service, or live-device E2E.
 5. Run focused tests, `./scripts/release-docs-drift-smoke.sh`,
-   `git diff --check`, and `./scripts/release-local.sh`. Keep Windows-only,
+   `git diff --check`, and the canonical gate applicable to the phase. Use the
+   Windows GUI/native and Windows hosted gates for this Windows-only phase;
+   `./scripts/release-local.sh` applies to Mac application work. Keep Windows-only,
    signing, notarization, clean-profile, and live-device evidence separate and
    name every unexecuted boundary.
 6. Obtain an independent review proportional to risk and resolve every blocking

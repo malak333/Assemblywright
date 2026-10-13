@@ -8,6 +8,7 @@
 - Owner-requested exception (2026-10-12): Windows local feature-planning chat and the Assembly Line queue are allowed under `docs/windows-local-pipeline.md`. Chat drafts have no execution, queue, repository-write, or publication authority.
 - The owner's exact Mac-controls request permits separate local orchestrator/reviewer settings, enforced global permissions, and GitHub setup/publication after an explicit owner connection. Preserve the local inference pivot and truthful publication/recovery evidence.
 - Owner-requested correction (2026-10-13): orchestrator planning/chat and final review use the owner's authenticated ChatGPT account through Codex, with separate advertised model/reasoning selections. Local inference retains implementation authority. This response-only provider exception is bounded to those two roles; preserve frozen legacy jobs, cancellation, pause, scope and truthful provider evidence.
+- Owner scope clarification (2026-10-13): this phase concerns the Windows GUI and same-computer workflow only. Use the applicable Windows production, local GUI/native and distributed gates for publication. Mac application work, Swift validation and remote Mac control are deferred; preserve the existing Mac source and workflows.
 - Preserve fail-closed policy, planning/action separation, redaction, cancellation, emergency pause, and audit evidence.
 - Keep repository validation distinct from signing, notarization, live-device QA, and owner-recorded external evidence.
 
