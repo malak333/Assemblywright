@@ -457,6 +457,15 @@ These notes capture durable facts for future agents working on this repository.
   combining both conditions in the counter rejected it at the four-window cap.
   Require both conditions for acceptance and replay that exact sequence, plus
   ongoing growth and unbounded variation, through the shared decision logic.
+- Scope Job Object descendant and crash-reaping tests, their child fixtures,
+  and `tasklist` probes to Windows. The same-computer Windows lane's native
+  containment assertions are not Unix proof. Keep them in both Windows gates
+  while portable pipeline assertions continue in the Mac workspace suite.
+- Ignored validator helpers are child programs for real parent-process tests.
+  A broad canonical `cargo test --workspace -- --ignored` invocation must not
+  read or mutate the repository, sleep or spawn those children. Require explicit
+  exact helper selection and an isolated candidate before effects; retain the
+  parent-process tests and truthful helper-only proof boundaries.
 - Model availability can change while the cached catalog and executable remain
   the same. The later saved GPT-6.1-Sol/medium selection returned READY through
   a real response-only probe on 2026-10-13. Retain the earlier account rejection

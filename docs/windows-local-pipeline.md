@@ -1120,6 +1120,35 @@ rejected and released. Its exact fixture SHA-256 is
 retained in `target/publication/parent-capture-offbyone.json`. Independent
 high-risk review approved the correction.
 
+### Platform and child-fixture boundaries in the full Mac release gate
+
+Source `0b2dcea` passed production Windows, the full Windows GUI gate and the
+distributed Windows gate. The Mac workspace test run passed twenty-eight local
+pipeline cases but failed two tests asserting Windows Job Object behavior. One
+called Windows `tasklist`; the other expected a Windows descendant-containment
+failure from the non-Windows validator implementation. The complete failed log
+is retained as `target/publication/mac-final-0b2-failure.log`.
+
+Those two parent cases, their Windows child fixtures and helpers are now scoped
+to Windows, where both hosted Windows gates continue to execute them. This is
+platform-correct test classification, with no production behavior change or
+Unix containment claim. The canonical next step's broad `--ignored` invocation
+was also audited: validator helpers must run only when selected by their exact
+name inside an isolated candidate, and perform no effects when the entire
+ignored suite is invoked. Their ordinary parent tests retain the real process
+boundary coverage.
+
+The corrected Windows native rerun passed all thirty-one default cases,
+including both Job Object scenarios, with nine ignored child helpers. A separate
+broad ignored invocation passed all nine helpers as safe no-ops and preserved
+repository status and file inventory. Focused clippy with warnings denied,
+formatting and whitespace checks passed. Proof is retained as
+`target/publication/windows-local-pipeline-full.log`,
+`windows-pipeline-broad-ignored.log`, `windows-local-pipeline-clippy.log` and
+`windows-local-pipeline-fmt.log`. The portable Mac inventory has twenty-eight
+default cases and five ignored helpers; its hosted execution is verified
+separately before source merge.
+
 The intervening saved reviewer `gpt-6.1-sol/medium` returned `READY` through an
 actual response-only call on this installation; its selection was preserved.
 Current successful availability does not erase an earlier account rejection or

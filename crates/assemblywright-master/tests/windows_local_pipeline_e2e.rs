@@ -1077,6 +1077,7 @@ fn cancellation_arriving_with_review_response_wins_over_completion() {
     assert!(fixture.state.join("cancel.flag").exists());
 }
 
+#[cfg(windows)]
 #[test]
 fn validator_descendant_is_terminated_and_rejects_the_gate() {
     let fixture = Fixture::new();
@@ -1111,6 +1112,7 @@ fn validator_descendant_is_terminated_and_rejects_the_gate() {
     assert_process_exits(pid);
 }
 
+#[cfg(windows)]
 #[test]
 fn runner_crash_kills_validator_tree_and_status_reconciles_interrupted() {
     let fixture = Fixture::new();
@@ -1283,6 +1285,9 @@ fn state_lock_and_local_emergency_pause_fail_closed() {
 #[test]
 #[ignore]
 fn validator_success_fixture() {
+    if !enter_validator_fixture("validator_success_fixture") {
+        return;
+    }
     let content = fs::read_to_string("src.py").expect("candidate src.py");
     if !content.contains("GOOD") {
         eprintln!("expected GOOD marker");
@@ -1290,9 +1295,13 @@ fn validator_success_fixture() {
     }
 }
 
+#[cfg(windows)]
 #[test]
 #[ignore]
 fn validator_windows_model_path_fixture() {
+    if !enter_validator_fixture("validator_windows_model_path_fixture") {
+        return;
+    }
     let content = fs::read_to_string("docs/windows-run-and-recovery.md")
         .expect("candidate Windows run and recovery guide");
     if !content.contains("GOOD") {
@@ -1304,18 +1313,27 @@ fn validator_windows_model_path_fixture() {
 #[test]
 #[ignore]
 fn validator_timeout_fixture() {
+    if !enter_validator_fixture("validator_timeout_fixture") {
+        return;
+    }
     thread::sleep(Duration::from_secs(10));
 }
 
 #[test]
 #[ignore]
 fn validator_mutation_fixture() {
+    if !enter_validator_fixture("validator_mutation_fixture") {
+        return;
+    }
     fs::write("src.py", "GOOD = 'validator changed this'\n").unwrap();
 }
 
 #[test]
 #[ignore]
 fn validator_untracked_fixture() {
+    if !enter_validator_fixture("validator_untracked_fixture") {
+        return;
+    }
     fs::write(
         "rogue-output.txt",
         "validator output outside ignored paths\n",
@@ -1326,13 +1344,20 @@ fn validator_untracked_fixture() {
 #[test]
 #[ignore]
 fn validator_side_effect_fixture() {
+    if !enter_validator_fixture("validator_side_effect_fixture") {
+        return;
+    }
     fs::write("validator-ran.txt", "validator started\n").unwrap();
 }
 
+#[cfg(windows)]
 #[test]
 #[ignore]
 #[allow(clippy::zombie_processes)] // Deliberately leave the child for Job Object descendant cleanup.
 fn validator_descendant_fixture() {
+    if !enter_validator_fixture("validator_descendant_fixture") {
+        return;
+    }
     fs::create_dir_all("target").unwrap();
     let child = Command::new(std::env::current_exe().unwrap())
         .args([
@@ -1346,10 +1371,14 @@ fn validator_descendant_fixture() {
     fs::write("target/grandchild.pid", child.id().to_string()).unwrap();
 }
 
+#[cfg(windows)]
 #[test]
 #[ignore]
 #[allow(clippy::zombie_processes)] // Deliberately keep the tree alive until the runner is killed.
 fn validator_tree_wait_fixture() {
+    if !enter_validator_fixture("validator_tree_wait_fixture") {
+        return;
+    }
     fs::create_dir_all("target").unwrap();
     let child = Command::new(std::env::current_exe().unwrap())
         .args([
@@ -1368,10 +1397,54 @@ fn validator_tree_wait_fixture() {
     thread::sleep(Duration::from_secs(30));
 }
 
+#[cfg(windows)]
 #[test]
 #[ignore]
 fn validator_grandchild_fixture() {
+    if !enter_validator_fixture("validator_grandchild_fixture") {
+        return;
+    }
     thread::sleep(Duration::from_secs(30));
+}
+
+fn enter_validator_fixture(expected_name: &str) -> bool {
+    let arguments = std::env::args().collect::<Vec<_>>();
+    let selected_exactly = arguments
+        .windows(2)
+        .any(|pair| pair[0] == "--exact" && pair[1] == expected_name);
+    let selected_ignored = arguments.iter().any(|argument| argument == "--ignored");
+    if !selected_exactly || !selected_ignored {
+        eprintln!(
+            "fixture {expected_name} did not run: select it individually with --exact {expected_name} --ignored"
+        );
+        return false;
+    }
+
+    let current = std::env::current_dir().expect("validator fixture current directory");
+    assert!(
+        current.join(".git").exists(),
+        "validator fixture requires an isolated candidate Git checkout"
+    );
+    assert!(
+        current.join("src.py").is_file(),
+        "validator fixture requires the isolated candidate src.py"
+    );
+    let repository = Repository::open(&current).expect("validator fixture candidate repository");
+    assert_eq!(
+        repository
+            .workdir()
+            .expect("validator fixture non-bare candidate")
+            .canonicalize()
+            .unwrap(),
+        current.canonicalize().unwrap(),
+        "validator fixture current directory must be its candidate worktree"
+    );
+    assert_eq!(
+        repository.remotes().unwrap().len(),
+        0,
+        "validator fixture candidate must not retain a remote"
+    );
+    true
 }
 
 struct Fixture {
@@ -1934,6 +2007,7 @@ fn tree_shape(root: &Path) -> (usize, u64) {
     (files, bytes)
 }
 
+#[cfg(windows)]
 fn wait_for_candidate_file(fixture: &Fixture, relative: &str) -> PathBuf {
     let deadline = std::time::Instant::now() + Duration::from_secs(10);
     loop {
@@ -1968,6 +2042,7 @@ fn wait_for_stage(fixture: &Fixture, expected: &str) {
     }
 }
 
+#[cfg(windows)]
 fn assert_process_exits(pid: u32) {
     let deadline = std::time::Instant::now() + Duration::from_secs(8);
     loop {

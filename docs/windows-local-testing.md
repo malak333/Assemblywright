@@ -105,8 +105,8 @@ default-feature pipeline cases, twenty-five GitHub cases, seven isolated
 ChatGPT cases and the separate 320-child capture regression. Earlier totals
 above are historical checkpoints. The production GUI digest is
 `f6c4d697b0f8bd0932131b582e299ade1488f58bdbc47ee3a9ba50d426c9fb0d`.
-The current default pipeline suite has nine ignored child-validator helpers;
-their parent cases invoke them. The Windows model-path regression rejects
+The current default Windows pipeline suite has nine ignored child-validator
+helpers; their parent cases invoke them. The Windows model-path regression rejects
 rooted/drive/traversal/duplicate aliases without effects, then completes using a
 relative backslash representation through exact canonical allowlist checks.
 
@@ -115,3 +115,16 @@ abandonment readiness, including idle controls and exact attention/stage state.
 It retains every negative assertion and the original timeout. Seventeen native
 publication assertions passed in the parent rerun; the production distributed
 recovery rules remain unchanged.
+
+The two Job Object parent cases, their three child fixtures, Windows model-path
+fixture and `tasklist` helpers are Windows-only. The portable Mac test inventory
+therefore has twenty-eight default cases and five ignored child helpers; it
+does not establish Unix descendant containment. The Windows rerun still passed
+all thirty-one default cases, including both Job Object scenarios.
+
+All child-validator helpers require an exact individual name plus `--ignored`
+and a remote-free candidate checkout before executing. A separate broad
+`--ignored` native rerun passed all nine Windows helpers without creating files,
+spawning descendants or changing repository status. These nine safe no-ops are
+fixture-selection proof, not nine additional E2E acceptance cases. The real
+parent-process scenarios continue to exercise their effectful child invocations.
