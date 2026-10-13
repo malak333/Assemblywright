@@ -601,8 +601,12 @@ namespace Assemblywright.Windows
                 activeLineEntry = null;
                 queueLoopActive = false;
                 queueStopRequested = false;
-                EndStartOperation();
-                if (!IsDisposed) { RefreshAssemblyLineList(); UpdateLineButtons(); }
+                Exception presentationError = AssemblyLineTransition.TryProject(delegate
+                {
+                    EndStartOperation();
+                    if (!IsDisposed) { RefreshAssemblyLineList(); UpdateLineButtons(); }
+                });
+                if (presentationError != null) HandleLinePresentationFailure(presentationError);
             }
         }
 
@@ -660,8 +664,20 @@ namespace Assemblywright.Windows
             entry.result = result;
             entry.run_id = report == null ? entry.run_id : (report.run_id ?? string.Empty);
             entry.updated_at_ms = AssemblyLineStore.NowMilliseconds();
-            PersistAssemblyLine();
-            if (!IsDisposed) RefreshAssemblyLineList();
+            Exception presentationError = AssemblyLineTransition.PersistThenProject(PersistAssemblyLine, delegate
+            {
+                if (!IsDisposed) RefreshAssemblyLineList();
+            });
+            if (presentationError != null) HandleLinePresentationFailure(presentationError);
+        }
+
+        private void HandleLinePresentationFailure(Exception exception)
+        {
+            queueStopRequested = true;
+            if (IsDisposed) return;
+            string message = "The Assembly Line display could not refresh. Saved feature results are retained; the line is stopped. " + exception.Message;
+            try { SurfaceError(message); }
+            catch (Exception) { try { AppendLog(message + Environment.NewLine); } catch (Exception) { } }
         }
 
         private async Task StartFeatureAsync()
@@ -1176,22 +1192,25 @@ namespace Assemblywright.Windows
             AssemblyLineEntry oldSelected = SelectedLineEntry();
             string selectedId = oldSelected == null ? null : oldSelected.id;
             assemblyLineList.BeginUpdate();
-            assemblyLineList.Items.Clear();
-            foreach (AssemblyLineEntry entry in assemblyLine.entries)
+            try
             {
-                ListViewItem item = new ListViewItem(entry.title ?? string.Empty);
-                item.SubItems.Add(entry.repository ?? string.Empty);
-                item.SubItems.Add(entry.status ?? string.Empty);
-                item.SubItems.Add(entry.stage ?? string.Empty);
-                item.SubItems.Add(entry.attempt.ToString());
-                item.SubItems.Add(entry.result ?? string.Empty);
-                item.Tag = entry;
-                if (entry.status == "Completed") item.ForeColor = Color.FromArgb(35, 116, 73);
-                else if (entry.status == "Failed" || entry.status == "Interrupted") item.ForeColor = Color.FromArgb(170, 43, 48);
-                assemblyLineList.Items.Add(item);
-                if (entry.id == selectedId) item.Selected = true;
+                assemblyLineList.Items.Clear();
+                foreach (AssemblyLineEntry entry in assemblyLine.entries)
+                {
+                    ListViewItem item = new ListViewItem(entry.title ?? string.Empty);
+                    item.SubItems.Add(entry.repository ?? string.Empty);
+                    item.SubItems.Add(entry.status ?? string.Empty);
+                    item.SubItems.Add(entry.stage ?? string.Empty);
+                    item.SubItems.Add(entry.attempt.ToString());
+                    item.SubItems.Add(entry.result ?? string.Empty);
+                    item.Tag = entry;
+                    if (entry.status == "Completed") item.ForeColor = Color.FromArgb(35, 116, 73);
+                    else if (entry.status == "Failed" || entry.status == "Interrupted") item.ForeColor = Color.FromArgb(170, 43, 48);
+                    assemblyLineList.Items.Add(item);
+                    if (entry.id == selectedId) item.Selected = true;
+                }
             }
-            assemblyLineList.EndUpdate();
+            finally { assemblyLineList.EndUpdate(); }
             UpdateLineButtons();
         }
 

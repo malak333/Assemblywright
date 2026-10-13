@@ -1272,3 +1272,82 @@ for Windows behavior; existing Mac source and workflows are preserved.
 Automatically triggered Mac CI is separate evidence and does not hold up this
 Windows phase. Documentation, knowledge, unit/native E2E, independent review,
 normal publication and installed Windows proof remain required.
+
+### Windows GUI gate false-green correction
+
+Hosted run `38479062068` for source `561c639` reported success, but its retained
+GUI failure artifact says `SettingsOrchestratorReasoningBox` did not expose
+`High`, and it emitted no `gui-e2e.json`. The native suites and capture checks
+passed. This run does not establish a successful GUI journey and is not
+accepted for publication. Its original logs and artifacts remain under
+`target/publication/windows-local-561-success.log` and
+`hosted-windows-local-561-success/`; the historical directory name records the
+hosted conclusion, not the corrected proof assessment.
+
+The child harness correctly exited 1 after sanitized cleanup, but the caller
+continued to Cargo, which replaced `$LASTEXITCODE` with zero. The wrapper now
+checks build, capture and GUI exit codes immediately, reserves one new GUID
+directory, and consumes only fresh self-test and full-journey JSON from that
+invocation. The extended journey must bind a completed run and all twelve
+demo acceptance tests. The child explicitly exits zero only after success and
+cleanup; a failed child or missing/failed evidence stops before downstream
+tests can turn the gate green. The hosted artifact inventory retains the
+fresh unit evidence and native gate-regression report.
+
+Settings Reload closes its modal with `DialogResult.Retry`; model discovery is
+asynchronous and the replacement is a different window. The UIA journey now
+waits for that replacement instead of reacquiring the closing modal, scopes
+popup choices to the same process and confirms the selected value. An isolated
+delayed catalog fixture exercises this transition. Exact saved role and demo
+job assertions remain. These changes affect Windows validation and fixtures;
+the native runner and GitHub runtime bytes are unchanged. The separate terminal
+projection correction below changes the Windows GUI.
+
+`scripts/test-windows-gui-gate.ps1` runs the actual wrapper entrypoint in
+disposable repositories with native process fixtures. It covers immediate
+failure propagation, absence of fresh proof despite an unrelated stale pass,
+rejected/malformed proof and incomplete extended demos, alongside successful
+fresh evidence. Full real GUI validation remains a separate acceptance step.
+
+The gate boundary's exact new test source is SHA-256
+`821966c7d3ed26f2729fd324d3cf95f266f335788d7cfcd854155a1be1720ddd`.
+All twenty-three actual-entrypoint scenarios passed in Windows PowerShell 5.1
+and PowerShell 7.6, with twenty-one rejections proving no downstream
+Cargo/docs/git command and two complete fresh-proof successes. Frozen reports
+are `target/publication/windows-gui-gate-ps5-frozen.{log,json}` and
+`windows-gui-gate-ps7-frozen2.{log,json}`. The parent independently passed all
+twenty-three cases as `parent-windows-gui-gate-final.{log,json}`.
+
+### Windows terminal persistence and display projection
+
+The subsequent PowerShell 7 journey retained a second queue entry marked
+Failed while its native report was completed and `publication_status` was
+`local_only`; the first entry was Completed. Evidence is
+`target/windows-gui-tests/6424aa00153b46b29f0cc84d146cf857/failure.json`.
+That artifact omitted the terminal exception text, so its exact display
+exception is not established. Independent code tracing showed local-only
+publication can only be reached after owned completion is confirmed. Terminal
+persistence and display refresh shared one throwing method; a projection
+exception could therefore enter the outer failure handler and overwrite the
+saved Completed result as Failed. A passing rerun would not repair this path.
+
+`AssemblyLineTransition.PersistThenProject` now lets persistence failures
+propagate and catches only later display exceptions. `MarkLineTerminal` keeps
+the saved result and stops further queue advancement if projection fails;
+its error surface is best-effort and does not reclassify completion. The final
+queue refresh uses the same projection boundary, and ListView updates always
+balance BeginUpdate/EndUpdate through finally. Pending jobs remain frozen until
+the owner explicitly starts them after a stopped line.
+Finalization also releases the start gate inside this boundary before updating
+buttons; a repeated display exception cannot escape from that final cleanup.
+
+The existing FIFO/persistence self-test group uses real file Save/Load and
+injected display failures for both local-only and connected completion. It
+checks exact Completed status, stage, attempt, run/publication fields and the
+unchanged next Pending job. An injected persistence failure must propagate,
+skip projection and preserve the old bytes. The rebuilt Windows GUI passed all
+fourteen unit groups; the final proof is
+`target/publication/terminal-projection-final-units.json`. Its exact GUI digest is
+`d77623f23facafcef3b9db1d7b3f735fb17b017777f381b55a78986040cfebc5`.
+The native runner, GitHub adapter and model/review/publication authority are
+unchanged by this production GUI correction.

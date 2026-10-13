@@ -691,6 +691,24 @@ These notes capture durable facts for future agents working on this repository.
 - The owner prioritized a complete same-computer Windows pipeline. Mac control
   and distributed execution are deferred. `docs/windows-local-pipeline.md`
   overrides the earlier two-machine designs within the local lane's scope.
+- A PowerShell child script's `exit 1` does not automatically stop its caller.
+  A subsequent native command can overwrite `$LASTEXITCODE` and create a false
+  green gate. Check the exit immediately, require fresh completion evidence
+  from that exact invocation, and test rejection at the actual wrapper entry
+  point with disposable native-process dependencies. A shared old pass JSON
+  or a successful hosted job without current journey evidence is insufficient.
+- Windows settings Reload closes the old modal and asynchronously creates its
+  replacement after model discovery. Native UIA must wait for a different
+  window handle, scope popup selections to that GUI process, and verify the
+  selected value. Reacquiring an old closing dialog can falsely report missing
+  model or reasoning choices; saved settings assertions remain necessary.
+- Persist a confirmed queue result before refreshing its presentation, and
+  catch display failures separately. Throwing a refresh exception into the
+  generic queue failure handler can rewrite an already saved Completed result
+  as Failed. A projection failure stops further queue advancement while keeping
+  saved run/publication bindings and pending frozen work. Persistence failures
+  remain throwing failures; an injected real Save/Load regression covers both
+  boundaries. Always balance native ListView BeginUpdate/EndUpdate with finally.
 - The previous general coding worker executed supplied file operations rather
   than asking a model to implement a feature, and required macOS. The durable
   orchestration ledger had no automatic dispatcher. A healthy Windows service

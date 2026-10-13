@@ -41,6 +41,13 @@ jobs:
           $ErrorActionPreference = 'Stop'
           if ($fixtureExit -ne 0) { throw "The isolated ChatGPT fixture E2E suite failed with exit code $fixtureExit." }
 
+      - name: Test Windows GUI gate failure propagation
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & ./scripts/test-windows-gui-gate.ps1
+          if ($LASTEXITCODE -ne 0) { throw 'The Windows GUI gate regression failed.' }
+
       - name: Test WinForms build, self-tests, and native UI Automation
         shell: powershell
         run: |
@@ -57,6 +64,7 @@ jobs:
           path: |
             target/windows-ci/chatgpt-fixture-e2e.log
             target/windows-ci/windows-process-capture.json
-            target/windows-gui/gui-unit-tests.json
+            target/windows-gui-tests/*/gui-unit-tests.json
+            target/windows-ci/windows-gui-gate.json
             target/windows-gui-tests/*/gui-e2e.json
             target/windows-gui-tests/*/failure.json

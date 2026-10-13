@@ -649,6 +649,7 @@ C# compiler and the existing Rust runner:
 
 ```powershell
 ./scripts/validate-windows-gui.ps1 -LiveDemo
+./scripts/test-windows-gui-gate.ps1
 ./scripts/build-windows-gui.ps1
 ./scripts/test-windows-gui.ps1 -NoBuild
 ./scripts/test-windows-gui.ps1 -NoBuild -LiveDemo

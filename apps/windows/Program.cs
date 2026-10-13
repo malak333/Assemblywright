@@ -408,6 +408,48 @@ namespace Assemblywright.Windows
                     Require(loadedLine.entries[0].status == "Interrupted" && loadedLine.entries[1].status == "Pending", "recovery advanced another job");
                     Require(AssemblyLineStore.Retry(loadedLine.entries[0]), "explicit retry rejected");
                     Require(object.ReferenceEquals(AssemblyLineStore.FirstPending(loadedLine), loadedLine.entries[0]), "retry silently reordered FIFO");
+                    string secondFrozen = loadedLine.entries[1].frozen_job_json;
+                    foreach (string publicationState in new string[] { "local_only", "succeeded" })
+                    {
+                        AssemblyLineEntry terminal = loadedLine.entries[0];
+                        terminal.status = "Completed";
+                        terminal.stage = "completed";
+                        terminal.attempt = 1;
+                        terminal.run_id = childId;
+                        terminal.publication_status = publicationState;
+                        terminal.publication_url = publicationState == "succeeded" ? "https://github.com/fixture/fixture/pull/1" : string.Empty;
+                        terminal.publication_merge_sha = publicationState == "succeeded" ? new string('b', 40) : string.Empty;
+                        string expectedUrl = terminal.publication_url, expectedMerge = terminal.publication_merge_sha;
+                        InvalidOperationException refreshFailure = new InvalidOperationException("Injected queue display failure.");
+                        Exception presentationError = AssemblyLineTransition.PersistThenProject(
+                            delegate { AssemblyLineStore.Save(linePath, loadedLine); },
+                            delegate
+                            {
+                                Require(AssemblyLineStore.Load(linePath).entries[0].status == "Completed", "projection ran before terminal persistence");
+                                throw refreshFailure;
+                            });
+                        Require(object.ReferenceEquals(presentationError, refreshFailure), "presentation failure escaped or was lost");
+                        AssemblyLineDocument retained = AssemblyLineStore.Load(linePath);
+                        Require(retained.entries[0].status == "Completed" && retained.entries[0].stage == "completed"
+                            && retained.entries[0].attempt == 1 && retained.entries[0].run_id == childId
+                            && retained.entries[0].publication_status == publicationState
+                            && retained.entries[0].publication_url == expectedUrl && retained.entries[0].publication_merge_sha == expectedMerge,
+                            "display failure reclassified or changed saved completion/publication evidence");
+                        Require(retained.entries[1].status == "Pending" && retained.entries[1].frozen_job_json == secondFrozen,
+                            "display failure changed the next frozen feature");
+                    }
+                    string beforeFailedSave = SharedFile.ReadUtf8Json(linePath);
+                    IOException persistenceFailure = new IOException("Injected queue persistence failure.");
+                    bool projectionCalled = false, persistenceRejected = false;
+                    try
+                    {
+                        AssemblyLineTransition.PersistThenProject(
+                            delegate { throw persistenceFailure; },
+                            delegate { projectionCalled = true; });
+                    }
+                    catch (IOException exception) { persistenceRejected = object.ReferenceEquals(exception, persistenceFailure); }
+                    Require(persistenceRejected && !projectionCalled, "persistence failure was hidden or allowed projection");
+                    Require(SharedFile.ReadUtf8Json(linePath) == beforeFailedSave, "failed persistence changed retained terminal bytes");
                 }
                 finally
                 {

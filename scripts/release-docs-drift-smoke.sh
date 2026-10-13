@@ -133,6 +133,7 @@ WINDOWS_PROTOCOL_WORKFLOW=".github/workflows/windows-protocol.yml"
 WINDOWS_LOCAL_WORKFLOW=".github/workflows/windows-local.yml"
 WINDOWS_GUI_BUILD="scripts/build-windows-gui.ps1"
 WINDOWS_GUI_VALIDATION="scripts/validate-windows-gui.ps1"
+WINDOWS_GUI_GATE_TEST="scripts/test-windows-gui-gate.ps1"
 WINDOWS_GUI_E2E="scripts/test-windows-gui.ps1"
 MASTER_MANIFEST="crates/assemblywright-master/Cargo.toml"
 RELEASE_VERSION_SCRIPT="scripts/release-version.sh"
@@ -325,7 +326,7 @@ for file in \
   "$WINDOWS_LOCAL_CODING_LIVE_CONTROL_SELF_CHECK" \
   "$WINDOWS_REPOSITORY_ONBOARDING" "$WINDOWS_REPOSITORY_ONBOARDING_SELF_CHECK" \
   "$WINDOWS_REPOSITORY_ONBOARDING_E2E" "$WINDOWS_PROTOCOL_WORKFLOW" \
-  "$WINDOWS_LOCAL_WORKFLOW" "$WINDOWS_GUI_BUILD" "$WINDOWS_GUI_VALIDATION" "$WINDOWS_GUI_E2E" \
+  "$WINDOWS_LOCAL_WORKFLOW" "$WINDOWS_GUI_BUILD" "$WINDOWS_GUI_VALIDATION" "$WINDOWS_GUI_GATE_TEST" "$WINDOWS_GUI_E2E" \
   "$MASTER_MANIFEST" \
   "$RELEASE_VERSION_SCRIPT" "$NAMING_CONTRACT_SMOKE"; do
   require_file "$file"
@@ -1447,6 +1448,12 @@ require_text "hosted Windows local fixture target" "$WINDOWS_LOCAL_WORKFLOW" \
   "--features local-chatgpt-test-fixture --target-dir target/chatgpt-test-target"
 require_text "hosted Windows GUI real-boundary gate" "$WINDOWS_LOCAL_WORKFLOW" \
   "./scripts/validate-windows-gui.ps1 -LiveDemo"
+require_text "hosted Windows GUI gate failure regression" "$WINDOWS_LOCAL_WORKFLOW" \
+  "./scripts/test-windows-gui-gate.ps1"
+require_text "build docs Windows GUI gate failure regression" "$BUILD_DOCS" \
+  "./scripts/test-windows-gui-gate.ps1"
+require_text "hosted Windows GUI fresh unit evidence" "$WINDOWS_LOCAL_WORKFLOW" \
+  "target/windows-gui-tests/*/gui-unit-tests.json"
 require_text "hosted Windows local fixture exit propagation" "$WINDOWS_LOCAL_WORKFLOW" \
   'if ($fixtureExit -ne 0)'
 require_text "hosted Windows local artifact retention" "$WINDOWS_LOCAL_WORKFLOW" \

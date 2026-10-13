@@ -211,6 +211,21 @@ namespace Assemblywright.Windows
         public AssemblyLineEntry() { }
     }
 
+    internal static class AssemblyLineTransition
+    {
+        internal static Exception PersistThenProject(Action persist, Action project)
+        {
+            persist();
+            return TryProject(project);
+        }
+
+        internal static Exception TryProject(Action project)
+        {
+            try { project(); return null; }
+            catch (Exception exception) { return exception; }
+        }
+    }
+
     internal static class AssemblyLineStore
     {
         internal const int MaximumPending = 100;

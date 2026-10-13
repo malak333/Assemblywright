@@ -1,5 +1,5 @@
 [CmdletBinding()]
-param([switch]$NoBuild, [switch]$LiveDemo)
+param([switch]$NoBuild, [switch]$LiveDemo, [string]$EvidencePath)
 
 $ErrorActionPreference = 'Stop'
 $repositoryRoot = Split-Path -Parent $PSScriptRoot
@@ -29,7 +29,22 @@ public static class AssemblywrightGuiNativeTest {
 '@
 $utf8 = New-Object System.Text.UTF8Encoding($false)
 $testId = [guid]::NewGuid().ToString('N')
-$evidenceRoot = Join-Path $repositoryRoot ('target/windows-gui-tests/' + $testId)
+$evidenceBase = [System.IO.Path]::GetFullPath((Join-Path $repositoryRoot 'target/windows-gui-tests'))
+if ([string]::IsNullOrWhiteSpace($EvidencePath)) {
+    $EvidencePath = Join-Path (Join-Path $evidenceBase $testId) 'gui-e2e.json'
+} else {
+    if (-not [System.IO.Path]::IsPathRooted($EvidencePath)) { $EvidencePath = Join-Path $repositoryRoot $EvidencePath }
+    $EvidencePath = [System.IO.Path]::GetFullPath($EvidencePath)
+    $evidencePrefix = $evidenceBase.TrimEnd([System.IO.Path]::DirectorySeparatorChar) + [System.IO.Path]::DirectorySeparatorChar
+    if (-not $EvidencePath.StartsWith($evidencePrefix, [System.StringComparison]::OrdinalIgnoreCase) -or
+        [System.IO.Path]::GetFileName($EvidencePath) -ne 'gui-e2e.json') {
+        throw 'The GUI evidence path must be a fresh gui-e2e.json below target/windows-gui-tests.'
+    }
+}
+$evidenceRoot = Split-Path -Parent $EvidencePath
+if ((Test-Path -LiteralPath $EvidencePath) -or (Test-Path -LiteralPath (Join-Path $evidenceRoot 'failure.json'))) {
+    throw 'The GUI evidence destination is not fresh.'
+}
 $temporaryBase = [System.IO.Path]::GetFullPath((Join-Path $env:TEMP 'assemblywright-gui-tests'))
 $testRoot = Join-Path $temporaryBase $testId
 New-Item -ItemType Directory -Path $testRoot, $evidenceRoot -Force | Out-Null
@@ -160,15 +175,32 @@ function Select-ControlOption($Window, [string]$Name, [string]$Option) {
                 $condition = New-Object System.Windows.Automation.PropertyCondition(
                     [System.Windows.Automation.AutomationElement]::NameProperty, $Option
                 )
-                $items = $control.FindAll([System.Windows.Automation.TreeScope]::Descendants, $condition)
+                $items = @($control.FindAll([System.Windows.Automation.TreeScope]::Descendants, $condition))
+                if ($items.Count -eq 0) {
+                    $items = @([System.Windows.Automation.AutomationElement]::RootElement.FindAll(
+                        [System.Windows.Automation.TreeScope]::Descendants, $condition
+                    ) | Where-Object { $_.Current.ProcessId -eq $control.Current.ProcessId })
+                }
                 foreach ($candidate in $items) {
                     $selection = $null
-                    if ($candidate.TryGetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern, [ref]$selection)) { return $candidate }
+                    if ($candidate.Current.IsEnabled -and -not $candidate.Current.IsOffscreen -and
+                        $candidate.TryGetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern, [ref]$selection)) { return $candidate }
                 }
                 return $null
             } "The $Name selector did not expose $Option."
             $item.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
-        } finally { $expand.Collapse() }
+            Wait-Until {
+                $selection = $null
+                if ($control.TryGetCurrentPattern([System.Windows.Automation.SelectionPattern]::Pattern, [ref]$selection)) {
+                    return @($selection.Current.GetSelection() | Where-Object { $_.Current.Name -eq $Option }).Count -eq 1
+                }
+                $value = $null
+                if ($control.TryGetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern, [ref]$value)) { return $value.Current.Value -eq $Option }
+                return $null
+            } "The $Name selector did not retain $Option after selection." 5 | Out-Null
+        } finally {
+            try { $expand.Collapse() } catch [System.Windows.Automation.ElementNotAvailableException] { }
+        }
         return
     }
     $selection = $null
@@ -241,6 +273,7 @@ function Get-SanitizedGuiEvidence($Gui) {
         report = $null
         ui = $null
     }
+    $report = Read-Report $Gui.State
     $line = Read-TestJson (Join-Path $Gui.State 'assembly-line.json')
     if ($line) {
         $snapshot.queue = @($line.entries | ForEach-Object {
@@ -249,11 +282,12 @@ function Get-SanitizedGuiEvidence($Gui) {
                 stage = $_.stage
                 attempt = $_.attempt
                 has_run_id = -not [string]::IsNullOrWhiteSpace($_.run_id)
+                report_run_match = -not [string]::IsNullOrWhiteSpace($_.run_id) -and $report -and $_.run_id -eq $report.run_id
                 publication_status = $_.publication_status
+                terminal_error = $(if ($_.status -in @('Failed', 'Cancelled', 'Interrupted')) { ConvertTo-SafeDiagnosticText $_.result } else { '' })
             }
         })
     }
-    $report = Read-Report $Gui.State
     if ($report) {
         $snapshot.report = [ordered]@{
             status = $report.status
@@ -329,6 +363,31 @@ function Find-Dialog($Gui, [string]$Id) {
         }
         return $null
     } "The $Id dialog did not open."
+}
+
+function Reload-SettingsDialog($Gui, $Dialog) {
+    $previousHandle = $Dialog.Current.NativeWindowHandle
+    Click-Control $Dialog 'SettingsReloadButton'
+    return Wait-Until {
+        $condition = New-Object System.Windows.Automation.PropertyCondition(
+            [System.Windows.Automation.AutomationElement]::ProcessIdProperty, $Gui.Process.Id
+        )
+        $windows = @($Gui.Window.FindAll(
+            [System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition
+        )) + @([System.Windows.Automation.AutomationElement]::RootElement.FindAll(
+            [System.Windows.Automation.TreeScope]::Children, $condition
+        ))
+        foreach ($window in $windows) {
+            try {
+                if (($window.Current.AutomationId -eq 'SettingsDialog' -or $window.Current.Name -eq 'Settings') -and
+                    $window.Current.ControlType -eq [System.Windows.Automation.ControlType]::Window -and
+                    $window.Current.ProcessId -eq $Gui.Process.Id -and
+                    $window.Current.NativeWindowHandle -ne 0 -and $window.Current.NativeWindowHandle -ne $previousHandle -and
+                    $window.Current.IsEnabled) { return $window }
+            } catch [System.Windows.Automation.ElementNotAvailableException] { }
+        }
+        return $null
+    } 'The reloaded settings catalog did not open a replacement dialog.'
 }
 
 function Read-Report([string]$State) {
@@ -498,7 +557,7 @@ try {
     Close-Gui $failureGui
     $failureRecoveredReport = Wait-Run $failureState 'cancelled'
 
-    $parityState = Join-Path $testRoot 'mac parity state'
+    $parityState = Join-Path $testRoot 'windows controls state'
     New-Item -ItemType Directory -Path $parityState -Force | Out-Null
     $legacySettings = [ordered]@{ schema_version = 1; endpoint = "http://127.0.0.1:$port/v1"; model = 'gui-fixture'; reviewer_model = 'gui-review-fixture'; reasoning_effort = 'none'; reviewer_reasoning_effort = 'none'; revision = 4; default_attempts = 3; timeout_seconds = 300 }
     Write-Utf8File (Join-Path $parityState 'gui-settings.json') ($legacySettings | ConvertTo-Json -Compress)
@@ -512,11 +571,13 @@ try {
     Click-Control $parityGui.Window 'SettingsButton'
     $settingsDialog = Find-Dialog $parityGui 'SettingsDialog'
     foreach ($providerControl in @('SettingsOrchestratorProviderBox', 'SettingsReviewerProviderBox')) {
-        try { Find-Control $settingsDialog $providerControl | Out-Null; throw 'Mac role settings exposed an unsupported provider selector.' } catch { if ($_.Exception.Message -eq 'Mac role settings exposed an unsupported provider selector.') { throw } }
+        try { Find-Control $settingsDialog $providerControl | Out-Null; throw 'Windows role settings exposed an unsupported provider selector.' } catch { if ($_.Exception.Message -eq 'Windows role settings exposed an unsupported provider selector.') { throw } }
     }
     Set-ControlText $settingsDialog 'SettingsEndpointBox' "http://127.0.0.1:$port/v1"
-    Click-Control $settingsDialog 'SettingsReloadButton'
-    $settingsDialog = Find-Dialog $parityGui 'SettingsDialog'
+    Write-Utf8File (Join-Path $parityState 'chatgpt-fixture-models-delay-ms.txt') '1800'
+    $reloadStarted = [DateTime]::UtcNow
+    $settingsDialog = Reload-SettingsDialog $parityGui $settingsDialog
+    if (([DateTime]::UtcNow - $reloadStarted).TotalMilliseconds -lt 1400) { throw 'Settings reload did not cross the delayed ChatGPT catalog boundary.' }
     Set-ControlText $settingsDialog 'SettingsLocalModelBox' 'gui-fixture'
     Select-ControlOption $settingsDialog 'SettingsLocalReasoningBox' 'low'
     Select-ControlOption $settingsDialog 'SettingsOrchestratorModelBox' 'GPT Plan'
@@ -536,8 +597,7 @@ try {
     Write-Utf8File (Join-Path $parityState 'chatgpt-fixture-models-error.txt') 'unavailable'
     Click-Control $parityGui.Window 'SettingsButton'
     $settingsDialog = Find-Dialog $parityGui 'SettingsDialog'
-    Click-Control $settingsDialog 'SettingsReloadButton'
-    $settingsDialog = Find-Dialog $parityGui 'SettingsDialog'
+    $settingsDialog = Reload-SettingsDialog $parityGui $settingsDialog
     Click-Control $settingsDialog 'SettingsCancelButton'
     if ([System.IO.File]::ReadAllText((Join-Path $parityState 'gui-settings.json'), $utf8) -ne $savedSettingsText) { throw 'Failed ChatGPT catalog reload changed saved role settings.' }
     Remove-Item -LiteralPath (Join-Path $parityState 'chatgpt-fixture-models-error.txt')
@@ -932,8 +992,7 @@ try {
         Click-Control $liveGui.Window 'SettingsButton'
         $liveSettingsDialog = Find-Dialog $liveGui 'SettingsDialog'
         Set-ControlText $liveSettingsDialog 'SettingsEndpointBox' "http://127.0.0.1:$port/v1"
-        Click-Control $liveSettingsDialog 'SettingsReloadButton'
-        $liveSettingsDialog = Find-Dialog $liveGui 'SettingsDialog'
+        $liveSettingsDialog = Reload-SettingsDialog $liveGui $liveSettingsDialog
         Set-ControlText $liveSettingsDialog 'SettingsLocalModelBox' 'gui-fixture'
         Select-ControlOption $liveSettingsDialog 'SettingsLocalReasoningBox' 'low'
         Select-ControlOption $liveSettingsDialog 'SettingsOrchestratorModelBox' 'GPT Plan'
@@ -1028,9 +1087,8 @@ try {
         extended_fixture_chat = $(if ($LiveDemo) { 'passed' } else { $null })
         extended_fixture_saved_job = $(if ($LiveDemo) { [ordered]@{ endpoint = $submittedDemo.endpoint; implementation_model = $submittedDemo.model; implementation_reasoning_effort = $submittedDemo.reasoning_effort; orchestrator_model = $submittedDemo.orchestrator_model; orchestrator_reasoning_effort = $submittedDemo.orchestrator_reasoning_effort; reviewer_model = $submittedDemo.reviewer_model; reviewer_reasoning_effort = $submittedDemo.reviewer_reasoning_effort; max_attempts = $submittedDemo.max_attempts; timeout_seconds = $submittedDemo.validation.timeout_seconds; acceptance_tests = 12 } } else { $null })
     }
-    $evidencePath = Join-Path $evidenceRoot 'gui-e2e.json'
-    Write-Utf8File $evidencePath ($evidence | ConvertTo-Json -Depth 6)
-    Write-Host "Windows GUI E2E passed: $evidencePath"
+    Write-Utf8File $EvidencePath ($evidence | ConvertTo-Json -Depth 6)
+    Write-Host "Windows GUI E2E passed: $EvidencePath"
 } catch {
     $failureRecord = New-SanitizedFailureRecord $_.Exception $_.ScriptStackTrace
     Write-Host $failureRecord.failure_site
@@ -1067,3 +1125,4 @@ if ($failureExit) {
     Write-Host (Format-SanitizedFailureOutput $failureExit)
     exit 1
 }
+exit 0

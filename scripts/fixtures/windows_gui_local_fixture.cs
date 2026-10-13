@@ -43,6 +43,15 @@ internal static class GuiLocalFixture
             if (args[0] == "chatgpt-models")
             {
                 string state = Path.GetFullPath(Value(args, "--state-dir") ?? string.Empty);
+                string delayPath = Path.Combine(state, "chatgpt-fixture-models-delay-ms.txt");
+                if (File.Exists(delayPath))
+                {
+                    int delayMilliseconds;
+                    string delayText = File.ReadAllText(delayPath).Trim();
+                    File.Delete(delayPath);
+                    if (!int.TryParse(delayText, out delayMilliseconds) || delayMilliseconds < 1 || delayMilliseconds > 5000) throw new InvalidDataException("Invalid bounded ChatGPT catalog delay.");
+                    Thread.Sleep(delayMilliseconds);
+                }
                 if (File.Exists(Path.Combine(state, "chatgpt-fixture-models-error.txt"))) { Console.Error.WriteLine("Fixture ChatGPT account is unavailable."); return 1; }
                 Console.WriteLine(Json.Serialize(Map("status", "ok", "account_type", "chatgpt", "models", new object[] {
                     Map("id", "gpt-plan", "name", "GPT Plan", "reasoning_efforts", new object[] { "high" }, "default_reasoning_effort", "high"),

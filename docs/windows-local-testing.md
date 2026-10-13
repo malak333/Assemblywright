@@ -17,6 +17,7 @@ The generated Final Fantasy Tactics site has its own Playwright browser suite.
 | Global permissions | Strict mode/revision acknowledgements and exact approval bindings | Ask approve/reject, Auto/Full edit and command behavior, stopped effects and stale approvals |
 | GitHub setup and publication | Canonical Windows paths, repository/visibility validation, exact run/candidate/connection/receipt bindings, explicit throttling classification, bounded backoff and redaction | Native cases cover private creation, required-check polling/failure, `Retry-After`, repeated and alternating throttling, cancel/pause during backoff, ambiguous merge/reconciliation, real runner candidates and two successive clean source updates |
 | Generated website | Existing pure filter/movement assertions in the owner suite | Twenty-four Chromium/Firefox/WebKit groups cover semantic content/assets, search/filter recovery, keyboard details, movement, responsive layouts, strict paired screenshots, traces and error-free assets |
+| Windows GUI validation gate | Fresh unit and journey evidence, immediate child exit-code checks, extended demo completion binding | Actual gate entrypoint in disposable repositories rejects nonzero children, missing/stale/failed/malformed evidence and incomplete extended demos before downstream commands; full real native UIA remains separate |
 
 The earlier installed proof retained fourteen GUI unit groups, eleven local-runner
 units, six GitHub units, thirty default-feature runner E2E cases and twenty
@@ -53,6 +54,15 @@ For the owner's current Windows-only scope, publication requires production
 Windows, Windows-local and Windows distributed gates on the exact candidate.
 Mac application and Swift validation are deferred; the existing Mac workflow
 can run independently but is not this phase's acceptance gate.
+
+The gate regression command is `./scripts/test-windows-gui-gate.ps1`. The
+validation wrapper reserves a new GUID evidence directory for each invocation,
+checks child exit codes before any later command can overwrite them, and reads
+only that invocation's unit and complete journey JSON. `-LiveDemo` additionally
+requires the completed extended run and twelve acceptance tests. Its hosted
+artifacts include fresh unit, journey and failure evidence plus the gate
+regression report. A successful job status alone is insufficient if the native
+journey has no corresponding fresh completion artifact.
 
 ## Gap assessment
 
@@ -121,7 +131,10 @@ fourteen GUI groups, thirteen local-runner units, eight GitHub units, thirty-one
 default-feature pipeline cases, twenty-five GitHub cases, seven isolated
 ChatGPT cases and the separate 320-child capture regression. Earlier totals
 above are historical checkpoints. The production GUI digest is
-`f6c4d697b0f8bd0932131b582e299ade1488f58bdbc47ee3a9ba50d426c9fb0d`.
+`d77623f23facafcef3b9db1d7b3f735fb17b017777f381b55a78986040cfebc5`.
+The earlier authenticated automatic demo used GUI digest
+`f6c4d697b0f8bd0932131b582e299ade1488f58bdbc47ee3a9ba50d426c9fb0d`;
+keep its live proof separate from the subsequent display-projection correction.
 The current default Windows pipeline suite has nine ignored child-validator
 helpers; their parent cases invoke them. The Windows model-path regression rejects
 rooted/drive/traversal/duplicate aliases without effects, then completes using a
@@ -154,3 +167,12 @@ does not advance before the owner acts. Bounded sanitized queue, report and UI
 state is retained if readiness, admission or completion fails. This replaces a
 fixed startup sleep and closes a diagnostic gap without adding nominal test
 counts or claiming an unproven product root cause.
+
+Terminal queue persistence is also separated from display refresh. The existing
+FIFO/persistence unit group uses real Windows Save/Load with an injected
+projection exception for both local-only and connected completion; the saved
+Completed result, run/publication fields and next frozen Pending feature stay
+intact. A separate injected persistence failure propagates, never projects and
+leaves the old bytes unchanged. The GUI stops queue advancement on a display
+failure and retains the authoritative result. Full native UIA still exercises
+normal sequential completion through this production boundary.
