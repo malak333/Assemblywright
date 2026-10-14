@@ -1190,7 +1190,8 @@ run IDs. Its saved-settings demo also passed all twelve acceptance checks.
 PowerShell 7 passed the same functional journey as
 `44db5751b61b47d2945919185e642f74`; the final catch-output-only correction was
 parsed under both shells and exercised by the exact Windows PowerShell rerun.
-The production GUI digest remains `f6c4d697b0f8bd0932131b582e299ade1488f58bdbc47ee3a9ba50d426c9fb0d`.
+At that historical checkpoint, the production GUI digest was
+`f6c4d697b0f8bd0932131b582e299ade1488f58bdbc47ee3a9ba50d426c9fb0d`.
 Independent high-risk review approved the final harness, evidence and docs.
 
 ### Later hosted callback-pool warm-up
@@ -1388,3 +1389,61 @@ the skipped-check rejection. Proof is
 `target/publication/windows-ci-scope-publication-adapter-final.log` and
 `release-local-selector-{ps5,ps7}.{log,json}`. No Mac application code or protected
 Windows service/configuration is changed by this CI routing slice.
+
+### Final Windows canonical validation and installed deployment
+
+The complete `scripts/validate-windows-gui.ps1 -LiveDemo` wrapper passed on
+committed source `b0e98cc724d10b37811517ea35f4cfba45a6a4b4`. Its fresh evidence
+directory is `target/windows-gui-tests/1d006c47caaf49969ceacbf11d3bbf13/`;
+`gui-unit-tests.json` records fourteen groups and `gui-e2e.json` records the full
+native journey. Extended demo run `116c365a-cd2e-4ca9-927c-602d9959e4ae` completed
+all twelve acceptance tests with the exact saved fixture models/reasoning,
+two attempts and forty-seven-second timeout. This is isolated fixture proof,
+without an authenticated ChatGPT or live local-model claim.
+
+The wrapper also passed thirteen local-runner units, eight GitHub units,
+thirty-one pipeline cases, twenty-five GitHub cases, the separate 320-child
+capture regression and docs/whitespace checks. Nine ignored pipeline child
+helpers remain helper-selection proof. The canonical log is
+`target/publication/windows-canonical-b0e98cc.log`; runtime bindings are in
+`final-wrapper-runtime-build.json`. This rebuilt bundle's GUI bytes differ from
+the preceding focused `d77623` build; the earlier unit record remains historical.
+
+The tested default-feature bundle was installed through the normal Windows
+installer, preserving Desktop and Start shortcuts. Independent inspection at
+2026-10-14 00:06 UTC found one responding installed process, PID 58752, its
+window, the exact gear/shield/GitHub/Start/chat control IDs and Completed display.
+All four installed SHA-256 values match the canonical tested bundle:
+
+| Runtime | SHA-256 |
+| --- | --- |
+| `Assemblywright.exe` | `e1cee4fcee83c5b91db505456a8d9bbc0dbdb56a991601b1bb1b773cacdfc124` |
+| `assemblywright-local.exe` | `329addc69685dc4b348b8acec2d9ecbb4cfe65204fbdb02f5baa32026a60ce90` |
+| `assemblywright-github.exe` | `613f76e946848fa3df5657cd49e710c261fccd52518c070b64054fffbfc02b46` |
+| `windows-local-pipeline.ps1` | `5d9165a729f97e46a1fe16c14d8ceb4eb43847d3c6b9a1dd509cee2c3d10a817` |
+
+The persisted before-install hashes for `assembly-line.json`, `gui-job.json`,
+`gui-settings.json`, `latest.json` and `permissions.json` remain exact. Native
+run `bccd9049-9b3b-458a-bae9-1a45a3da24a8` remains completed. Proof is
+`target/publication/terminal-projection-installed.json`, with its pre-install
+snapshot and strict read-only verifier retained alongside it. That original
+automatic published demo used the earlier `f6c4d69` GUI; it is not relabeled as
+an execution on this new bundle. No fixture runtime was installed.
+
+Earlier immediate installation-readiness probes failed in Windows PowerShell
+5.1 and remain failed evidence. Extending their bound did not repair observation.
+Independent same-PID inspection established the difference: PowerShell 5.1/.NET
+Framework saw fallback pane nodes with numeric handle IDs, while PowerShell
+7.6.5/.NET 10 found all five exact AutomationIds in under one second. The latter
+runtime independently verified the installed controls, bytes and retained state.
+This establishes current installed health without claiming the failed probes
+passed or asserting an unmeasured startup SLA. No product behavior was changed
+to accommodate this deployment-only verifier.
+
+Documentation and safety compliance, durable knowledge, focused unit coverage,
+native E2E and independent high-risk source review passed for this Windows phase.
+The unit and E2E skills were applied to the native/process boundaries; the real
+demo's browser matrix remains separate. Source publication requires fresh hosted
+Windows gates and the Windows scope selector on the final docs closeout SHA.
+Mac application validation and protected Windows service deployment are outside
+this local GUI phase.

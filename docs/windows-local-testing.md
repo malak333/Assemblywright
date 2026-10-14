@@ -124,14 +124,14 @@ regressions reject the hosted growing prefix and alternating continued growth,
 then accept its later plateau. The earlier four-window checkpoint and its
 failed hosted evidence remain separately recorded in the pipeline closeout.
 
-The corrected current native journey is
-`5f887284abdd4eb182667109ca93425f`; its submitted demo job and twelve-test
+The current canonical native journey is
+`1d006c47caaf49969ceacbf11d3bbf13`; its submitted demo job and twelve-test
 completion are recorded in the pipeline closeout. Current focused totals are
 fourteen GUI groups, thirteen local-runner units, eight GitHub units, thirty-one
 default-feature pipeline cases, twenty-five GitHub cases, seven isolated
 ChatGPT cases and the separate 320-child capture regression. Earlier totals
 above are historical checkpoints. The production GUI digest is
-`d77623f23facafcef3b9db1d7b3f735fb17b017777f381b55a78986040cfebc5`.
+`e1cee4fcee83c5b91db505456a8d9bbc0dbdb56a991601b1bb1b773cacdfc124`.
 The earlier authenticated automatic demo used GUI digest
 `f6c4d697b0f8bd0932131b582e299ade1488f58bdbc47ee3a9ba50d426c9fb0d`;
 keep its live proof separate from the subsequent display-projection correction.
@@ -176,3 +176,13 @@ intact. A separate injected persistence failure propagates, never projects and
 leaves the old bytes unchanged. The GUI stops queue advancement on a display
 failure and retains the authoritative result. Full native UIA still exercises
 normal sequential completion through this production boundary.
+
+The complete Windows wrapper passed on source `b0e98cc`, rebuilding the current
+production bundle and consuming fresh unit/journey evidence from that invocation.
+The independently inspected installed bundle matches all four tested runtime
+digests, exposes all five expected control IDs and retains the Completed display
+and all five pre-install owner JSON hashes. Inspection used PowerShell 7.6.5;
+Windows PowerShell 5.1 exposed only fallback pane/handle nodes in this installed
+session, so its earlier readiness failures remain failures. This observation
+does not replace the separate full canonical GUI journey or establish a startup
+timing guarantee. The original automatic demo still belongs to its earlier bytes.

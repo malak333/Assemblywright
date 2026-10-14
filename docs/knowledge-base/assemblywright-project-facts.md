@@ -1,5 +1,18 @@
 # Assemblywright Project Facts
 
+## Windows installed GUI observation
+
+- Bind deployment proof to all four tested runtime digests, the installed PID,
+  exact UI control IDs, retained owner JSON hashes and native run identity.
+  A rebuilt GUI can have different bytes even with unchanged C# source; preserve
+  earlier authenticated workflow evidence under its actual original digest.
+- In the 2026-10-13 installed session, Windows PowerShell 5.1/.NET Framework
+  exposed fallback pane nodes with numeric HWND IDs; PowerShell 7.6.5/.NET 10
+  exposed the same process's exact AutomationIds. A longer readiness timeout
+  did not fix the observer. Verify the provider/runtime before classifying a
+  missing control ID as an app startup failure; retain failed probes separately
+  from the successful independent inspection and full canonical GUI journey.
+
 ## GitHub selection and local Developer projects
 
 - GitHub discovery and Windows `local_projects` are distinct catalogs. Using a
