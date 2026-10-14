@@ -32,12 +32,12 @@ $requiredChecks = @(
     [ordered]@{
         id = "release-local"; workflow = "Assemblywright Release Local Gate"; context = "Release local gate"; app_id = 15368
         workflow_id = 282605278; workflow_path = ".github/workflows/release-local.yml"
-        workflow_sha256 = "51e809a94f59193e213bdff6e49f3a86e612643f094e366055f42f8745026fd7"
+        workflow_sha256 = "6c2e8710ec2cae10287dbed0d1f7343059d1630a7ca8749191c0d77dc7e083a4"
     },
     [ordered]@{
         id = "protocol-windows"; workflow = "Assemblywright Windows Distributed Gate"; context = "Protocol, master, identity, mTLS, and SCM"; app_id = 15368
         workflow_id = 314849303; workflow_path = ".github/workflows/windows-protocol.yml"
-        workflow_sha256 = "4284a27f06f7808179665e3ac0cbd90081e358a6c09b82d188ec6d414652b207"
+        workflow_sha256 = "a865984156057ad6c0443d29008a1feeaf37796cb06429b0e9e68f7ecb12e7c6"
     }
 )
 

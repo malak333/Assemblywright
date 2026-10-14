@@ -38,6 +38,11 @@ activation refer to the explicit `protected-service` mode.
 The separate `production-build.yml` workflow compiles the supervised production
 runner with `cargo build --release -p assemblywright-master --bin assemblywright-developer --locked`.
 That hosted compilation is separate from installed Windows deployment.
+For Windows-only phases, use the `windows-only` PR label and `[windows-only]`
+merge/main commit marker described in [Windows CI scope](windows-ci-scope.md).
+Run `./scripts/test-release-local-selector-cli.ps1` for fresh-process exit and
+rejection coverage, and `./scripts/test-release-local-selector.ps1` for the
+eighteen-case event-handler matrix.
 
 ## Developer chat history restoration
 
@@ -636,6 +641,72 @@ distinct restricted identities/ACLs, atomic suspended-process-to-Job containment
 provisioning checks, and native hostile denial proof before the adapters may load.
 Executable phases must add native E2E for those routes, one-at-a-time execution,
 termination, reconciliation, and hostile protected-control-plane mutation denial.
+
+## Windows local pipeline
+
+The scenario coverage map and proof limits are recorded in
+[`windows-local-testing.md`](windows-local-testing.md). Every owner-authorized
+feature/phase follows the documentation, knowledge-base, unit/E2E, independent
+review and scoped publication closeout checklist.
+
+The native Windows desktop frontend builds with the installed .NET Framework
+C# compiler and the existing Rust runner:
+
+```powershell
+./scripts/validate-windows-gui.ps1 -LiveDemo
+./scripts/test-windows-gui-gate.ps1
+./scripts/build-windows-gui.ps1
+./scripts/test-windows-gui.ps1 -NoBuild
+./scripts/test-windows-gui.ps1 -NoBuild -LiveDemo
+./scripts/test-windows-process-capture.ps1
+./scripts/install-windows-gui.ps1 -NoBuild
+```
+
+Double-click `Assemblywright.cmd` or the installed Desktop/Start shortcut.
+The GUI self-test entry point is
+`Assemblywright.exe --self-test C:/path/to/results.json`. GUI E2E uses native
+Windows UI Automation; the desktop GUI has no browser surface. A generated
+website is a separate browser artifact and should use its own browser E2E,
+screenshots, and cross-browser matrix in the owner-selected validation command.
+`test-windows-gui.ps1 -LiveDemo` retains a historical flag name but exercises
+extended fixture scenarios. Its evidence is fixture-only, separate from real
+authenticated ChatGPT and local-inference proof through the installed app.
+The full GUI gate also runs the captured-process regression: 320 immediate
+children cover exact stdout/stderr, successful/nonzero exits, launch failure
+and released process handles. The test compiles the actual production process
+helper with a credential-free native fixture and retains bounded JSON evidence.
+
+The native ChatGPT fixture suite requires an explicit test-only feature and an
+isolated target directory:
+
+```powershell
+cargo test -p assemblywright-master --features local-chatgpt-test-fixture --target-dir target/chatgpt-test-target --test windows_local_pipeline_e2e chatgpt_ -- --nocapture
+```
+
+Normal GUI builds omit this feature. Fixture-enabled executables belong only
+in the isolated test bundle. The production native catalog entry point is:
+
+```powershell
+./target/debug/assemblywright-local.exe chatgpt-models
+```
+
+The same-computer lane has a native Windows gate and live model demonstration:
+
+```powershell
+./scripts/validate-windows-local-pipeline.ps1
+./scripts/validate-windows-local-pipeline.ps1 -LiveDemo
+cargo build --locked -p assemblywright-master --bin assemblywright-local
+cargo test -p assemblywright-master --test windows_local_pipeline_e2e -- --nocapture
+cargo clippy -p assemblywright-master --all-targets --locked -- -D warnings
+./scripts/windows-local-pipeline.ps1 -Demo -NoBuild
+```
+
+See `docs/windows-local-pipeline.md` for real jobs, status, local Emergency
+Pause, and candidate completion. Native runner E2E uses loopback fake inference
+and a real validator process; the live demonstration separately proves the
+installed local model implements the feature. `release-local.sh` remains the
+macOS distribution gate and cannot establish Windows runner execution; use the
+native Windows package-scoped commands above on Windows.
 
 ## Required Local Gate
 
@@ -1370,6 +1441,17 @@ Windows final-DOS-path normalization, alternate-path rejection, POSIX
 rename/replacement revalidation, held-handle identity comparison, handle-relative
 directory creation, and Job Object descendant reaping; macOS execution cannot prove
 those Win32 behaviors.
+
+The distributed job has a sixty-minute outer budget. A clean hosted Windows run
+spent about twenty minutes in the serial native Developer workflow alone and
+was stopped by the former thirty-five-minute job limit while later master tests
+were passing. Individual fixture deadlines and every test command remain in
+place; the outer budget permits the complete master, broker, executor and SCM
+suite to finish.
+The distributed publication action has an outer deadline of 110 minutes,
+covering the five-minute selector followed by the ninety-minute Mac release
+gate plus ten minutes for scheduling and final reads. Each action receives a fresh
+control; current authority, cancellation and per-command checks remain active.
 
 Use the workflow's package-scoped protocol, master, broker, and executor clippy commands on
 Windows. Do not substitute the macOS/Linux workspace-wide clippy command: the

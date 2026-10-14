@@ -1,5 +1,24 @@
 # Assemblywright Project Facts
 
+## Windows installed GUI observation
+
+- Pure PowerShell scripts can leave `LASTEXITCODE` unset or inherited even when
+  their assertions pass. A hosted caller comparing that value with zero can
+  reject a successful suite. Report zero explicitly after cleanup and evidence
+  writing, and regress the actual native caller with both initial states.
+  Rejections must retain nonzero exit status and emit no passing report.
+
+- Bind deployment proof to all four tested runtime digests, the installed PID,
+  exact UI control IDs, retained owner JSON hashes and native run identity.
+  A rebuilt GUI can have different bytes even with unchanged C# source; preserve
+  earlier authenticated workflow evidence under its actual original digest.
+- In the 2026-10-13 installed session, Windows PowerShell 5.1/.NET Framework
+  exposed fallback pane nodes with numeric HWND IDs; PowerShell 7.6.5/.NET 10
+  exposed the same process's exact AutomationIds. A longer readiness timeout
+  did not fix the observer. Verify the provider/runtime before classifying a
+  missing control ID as an app startup failure; retain failed probes separately
+  from the successful independent inspection and full canonical GUI journey.
+
 ## GitHub selection and local Developer projects
 
 - GitHub discovery and Windows `local_projects` are distinct catalogs. Using a
@@ -267,6 +286,496 @@ These notes capture durable facts for future agents working on this repository.
 - Repository tests prove strict contracts and native process/mTLS behavior;
   they do not prove signed distribution, notarization, clean-profile install,
   or live-device model execution.
+
+## Windows Local Execution Pivot (2026-10-12)
+
+- The owner explicitly requested Mac-style Settings/shield/GitHub icons,
+  Assembly Line, and right-side chat. This permits a scoped Windows local
+  feature-planning chat, overriding the previous no-conversation rule only for
+  this requested surface. Model replies remain drafts; owner Add/Run controls
+  retain execution and queue authority.
+- Exact Mac icon parity uses `9c049d6`, the latest historical three-icon UI.
+  Header order is GitHub publication, Permissions, Settings, with SF Symbol
+  identities `arrow.triangle.branch`, `shield.lefthalf.filled`, and `gearshape`.
+  `64a31437` predates the complete header and its project-web link is not the
+  requested GitHub publication action. The earlier Windows pass incorrectly
+  substituted that link and a safeguards summary for the matching panels.
+- The GitHub panel manages account sign-in/refresh, repository discovery and
+  creation, empty local project creation, and saved project connections.
+  An owner connection opts future successful features into feature branch/PR,
+  required checks, and automatic merge. The shield saves global Ask/Auto/Full
+  permissions with revision checks and enforced approvals. Settings save
+  separate orchestrator/reviewer model and reasoning choices for future work.
+  The initial 2026-10-12 implementation used the Windows-local endpoint for
+  both roles. The owner's 2026-10-13 correction replaces future role settings
+  with the historical Mac app's ChatGPT/Codex model and reasoning selectors.
+- The corrected Windows workflow has three responsibilities: ChatGPT produces
+  a bounded feature plan, local inference implements the scoped edits, and
+  ChatGPT reviews the candidate plus validation evidence. Calling the local
+  code writer "Orchestrator" conflated implementation with Mac orchestration.
+  Keep the local implementation endpoint/model/effort separate from both
+  ChatGPT roles in Settings, new job JSON, and durable role artifacts.
+- ChatGPT models and their supported reasoning efforts come from the existing
+  signed-in Codex app-server catalog. Display provider names but persist model
+  IDs; preserve an effort only when the newly selected model advertises it,
+  otherwise use its advertised default. Do not hardcode model availability,
+  offer unsupported cloud effort `none`, or silently fall back to local AI.
+- Cloud planning, right-pane chat, and review use response-only contained Codex
+  calls with tools, inherited rules, project instructions, plugins, apps and
+  shell execution disabled. Resolve and SHA-bind the actual executable before
+  each catalog/call; a digest-pinned executable must not be probed by an
+  uncontained blocking `--version` subprocess. Assemblywright does not read,
+  copy, log or manage credential material and does not change global Codex
+  configuration. Publication and queue authority remain separate.
+- Migrate future GUI Settings to ChatGPT catalog defaults while preserving
+  already frozen local jobs. Preserve old local chat visibly, but exclude it
+  from cloud prompts; also exclude history belonging to a different cloud
+  model. A real selected-model call is stronger evidence than catalog presence.
+- `local-chatgpt-test-fixture` is an explicit default-off Cargo test feature.
+  Build fixture-enabled runners in `target/chatgpt-test-target`, never install
+  them as production. The GUI's historical `-LiveDemo` flag now denotes
+  extended fixture scenarios; authenticated ChatGPT and actual local inference
+  require separate evidence from the installed production app.
+- The installed Windows app proved the corrected workflow on 2026-10-13:
+  ChatGPT `gpt-5.6-sol/medium` planning, local `qwen3.6-35b-a3b/none`
+  implementation, and ChatGPT `gpt-5.6-terra/high` review. Fresh immutable run
+  `1a0b0e51-151e-4f62-87b2-f8d930aa7f57` completed on attempt one, published
+  private demo PR #3 automatically, and updated the clean connected checkout
+  to `952e230667cc3b06ef5d2114cd0a21000f47bce4`. Receipt revision 31 is
+  verified. Candidate, merged Windows source, required PR CI and post-merge CI
+  each passed the unchanged 24 browser groups. Exact artifacts and installation
+  hashes are recorded in the ChatGPT role closeout in the local-pipeline doc.
+- A parent demo validator falsely rejected the phrase "does not claim ...
+  production-ready" because it blacklisted the keyword without its negation.
+  The application correctly exhausted bounded attempts without publication.
+  Preserve that failed job; correct and test the owner harness before approving
+  a fresh immutable job. Include negated truthful descriptions and affirmative
+  unsupported claims in harness regression checks. Never weaken or mutate a
+  running job's gate just to convert its status to completion.
+- The native adapter on this installation selects the desktop Codex executable
+  under `%LOCALAPPDATA%/OpenAI/Codex/bin`, not the separately installed npm CLI.
+  Record the actual resolved path and SHA from `chatgpt-runtime.json`; a version
+  probe of another Codex executable cannot establish the runtime identity.
+- The owner made documentation compliance, reusable repository knowledge,
+  applicable unit/E2E workflows, independent review and scoped push/PR merge a
+  standing closeout requirement for every authorized feature/phase on
+  2026-10-13. The rule is persisted in `AGENTS.md` and the development workflow;
+  it does not authorize publishing unrelated dirty work.
+- A passing local Windows GUI/ChatGPT suite is not hosted CI integration.
+  `cargo test -p assemblywright-master` omits default-off ChatGPT fixture cases,
+  and Rust-only CI omits the C# GUI and UI Automation. The separate Windows
+  local hosted gate explicitly invokes both suites and preserves test evidence.
+  Keep the production bundle and isolated fixture-enabled target separate.
+- Before publishing a long-running dirty checkout, fetch the current remote
+  base and isolate the reviewed feature in a fresh worktree. This Windows slice
+  was ported onto current `origin/main` while preserving the newer Mac Developer
+  implementation and excluding unrelated local certificate-rotation edits in
+  `identity.rs`, `main.rs` and `enrollment_identity_e2e.rs`. Preserve both sides
+  of additive documentation/bin conflicts, then rerun the relevant gates on the
+  integrated source. A clean port does not make an older live binary a proof of
+  every newly integrated source component.
+- Windows atomic status replacement can fail transiently with
+  `ERROR_ACCESS_DENIED` or `ERROR_SHARING_VIOLATION` while another process opens
+  the old JSON file without delete sharing. Read GUI JSON with
+  `FileShare.ReadWrite | FileShare.Delete`, strict UTF-8 and a 4 MiB ceiling.
+  Keep `MoveFileExW` atomic and retry only those two errors for twelve attempts
+  with ten-millisecond gaps (at most 110 ms of delay); other errors fail
+  immediately, and a persistent lock preserves both old destination and new
+  temporary bytes. Never unlink the authority file as a replacement fallback.
+  The native unit test exercises a real transient/persistent Windows handle.
+- GitHub required-check polling must account for endpoint throttling even when
+  the account's primary quota remains available. The installed PR #4 run reached
+  HTTP 429 while its browser check passed; preserve that attention record and
+  reconcile the exact retained PR instead of creating another publication.
+  Routine checks use a fifteen-second interval. Explicit read-only HTTP 429
+  responses honor a valid integer `Retry-After` or bounded exponential backoff;
+  the four-retry allowance belongs to the entire check wait, including pending
+  responses between throttles. Cancellation and the existing deadline still
+  apply. Effectful publication commands are never retried by this policy.
+- Hosted Windows tests must configure an ephemeral local inference endpoint.
+  A demo test that silently depends on the workstation's port 8080 can pass
+  locally while failing on a clean CI runner. The GUI demo must freeze the same
+  saved implementation, ChatGPT planning and review settings as normal features;
+  assert those submitted values and execute the unchanged demo acceptance tests.
+- Platform-specific process cleanup results need platform-specific bindings.
+  Retain the termination call on every platform while binding its Windows-only
+  fallback result under `cfg(windows)`; the macOS warnings-as-errors gate catches
+  an otherwise unused binding.
+- Enable captured-child exit notification only after both asynchronous readers
+  have started. Otherwise a fast child can signal exit before capture is ready,
+  leaving a successful native response empty at the GUI boundary. Drain both
+  readers and dispose the process before completing its result. The durable
+  Windows regression compiles the production helper and checks 320 immediate
+  exits, exact stdout/stderr and exit codes, missing-executable failure and
+  released handles. It runs in the full GUI gate and retains bounded evidence.
+- A clean private candidate does not inherit ignored `node_modules` or a GUI
+  launcher's previous environment. Browser validation must locate its pinned
+  dependency explicitly through the acceptance suite's supported module setting
+  or install it through the approved validation command. Preserve a failed run
+  caused by a harness dependency omission; a successful corrected standalone
+  validator is not retroactive native completion evidence.
+- Local models may return relative edit paths with Windows backslashes. Treat
+  Windows separators as representation before exact canonical allowlist checks,
+  while rejecting traversal, roots, drive/UNC paths and duplicate aliases. Keep
+  owner job paths canonical and retain the original response as evidence. Do
+  not broaden the approved file scope to accommodate path formatting.
+- A recovery projection can become ready after its earlier attention/idle
+  transition. The distributed publication fixture must wait for the exact
+  authoritative `can_abandon_publication` projection, expected stage, failed
+  feature, attention status/checkpoint and idle controls before exercising the
+  action. Preserve stale, drifted, open/merged/missing-PR and no-effect rejection
+  assertions and the existing timeout. Bounded transition/snapshot/log
+  diagnostics distinguish a sampling race from an invalid durable binding.
+- The corrected installed Windows lane completed actual run
+  `bccd9049-9b3b-458a-bae9-1a45a3da24a8` on attempt one after Start with no
+  operator recovery: ChatGPT Sol/medium planned, local Qwen/none generated the
+  scoped guide, unchanged browser validation passed, and ChatGPT Terra/high
+  approved. The app created and merged private demo PR #5, verified receipt
+  revision 54 and updated the clean checkout to `c368438d45bf152032f1fa797fed442c55b77b38`.
+  Keep that successful new run distinct from PR #4's explicit reconciliation
+  and the retained failed dependency/path run. Exact runtime, source and hosted
+  test proof is recorded in the Windows local-pipeline closeout.
+- A fixture readiness file must contain validated data before a dependent test
+  advances. Publish the loopback model's port atomically and wait for an integer
+  in 1..65535, with a bounded timeout and early child-exit detection. File
+  existence alone can expose an empty write window on a clean hosted runner.
+- PowerShell 7 can interpret the `?` in a Rust canonical `\\?\` candidate path
+  as a wildcard when starting acceptance validation. Derive the ordinary path
+  independently from the retained run directory, verify it against the report,
+  and use that ordinary path as the child working directory. Resolve existing
+  Windows 8.3 aliases with `GetLongPathNameW` before comparing paths: a hosted
+  runner can expose `RUNNER~1` through TEMP while Rust reports `runneradmin`.
+  Keep the exact candidate comparison and fail on native resolution errors.
+- Budget the hosted Windows distributed job for the complete serial suite. The
+  native Developer workflow alone took about twenty minutes; the former
+  thirty-five-minute job deadline cancelled later passing master tests. The
+  sixty-minute outer limit retains all test commands and individual fixture
+  deadlines. Distinguish job cancellation from a test assertion failure.
+- A hosted workflow's outer time budget must fit inside the publication
+  controller's per-action deadline, including scheduling and final read margin.
+  Check all pinned gates rather than only the workflow just changed. The
+  distributed action now allows one hundred ten minutes for the dependent
+  five-minute selector and ninety-minute Mac gate, plus ten minutes of margin,
+  while also covering the sixty-minute Windows gate; cancellation, expired
+  deadline and lost-authority checks still fail closed. A regression reads the
+  actual pinned workflow budgets so future increases cannot silently outrun it.
+- Run the distributed publication proof controller with Windows PowerShell 5.1.
+  Its existing secured four-argument mutex constructor is unavailable in
+  PowerShell 7.6. The native 5.1 SelfTest passed; retain the separate compatibility
+  diagnostic instead of treating that optional probe as production GUI evidence.
+- Aggregate process handle counts include CLR and ThreadPool resources as well
+  as captured children. A clean hosted runner exposed growth after the original
+  short warm-up (299 to 344 handles). Establish a bounded stable handle/thread
+  baseline before measuring the same 320 children; keep the original leak
+  tolerance and prove the detector rejects deliberately retained process handles
+  and recovers after disposal. Record warm-up and final samples rather than
+  increasing the tolerance to accommodate a machine. Failed fixture evidence
+  must mark incomplete checks as unconfirmed.
+- Count no-new-peak windows independently from recent-range readiness in a
+  bounded stabilization probe. The hosted sequence
+  `439:48,449:50,484:57,484:57,484:57` ended with three identical samples, but
+  combining both conditions in the counter rejected it at the four-window cap.
+  Require both conditions for acceptance and replay that exact sequence, plus
+  ongoing growth and unbounded variation, through the shared decision logic.
+- Scope Job Object descendant and crash-reaping tests, their child fixtures,
+  and `tasklist` probes to Windows. The same-computer Windows lane's native
+  containment assertions are not Unix proof. Keep them in both Windows gates
+  while portable pipeline assertions continue in the Mac workspace suite.
+- Ignored validator helpers are child programs for real parent-process tests.
+  A broad canonical `cargo test --workspace -- --ignored` invocation must not
+  read or mutate the repository, sleep or spawn those children. Require explicit
+  exact helper selection and an isolated candidate before effects; retain the
+  parent-process tests and truthful helper-only proof boundaries.
+- A sixteen-process capture burst can queue stdout, stderr, exit and completion
+  callbacks; priming only thirty-two workers still allowed late hosted pool
+  growth. Prepare at least sixty-four actual queued workers before measuring,
+  preserve the 32-handle leak bound and 33-handle negative control, and enforce
+  both the eight-window cap and ninety-second deadline inside batch waits.
+  Retain growing warm-up samples as failed/unmeasured evidence rather than
+  increasing the leak tolerance or using a historical high-water baseline.
+- Native UIA window exposure is not application initialization proof. For a
+  retained queue restart, wait for the restored terminal status and enabled
+  Start control; then prove admission of the exact pending entry separately
+  from completion. Avoid fixed startup sleeps, preserve stopped-run identity,
+  and retain bounded sanitized queue/report/UI failure state before cleanup.
+  An old empty-log timeout cannot establish a product root cause by itself.
+- The owner clarified that the current phase is Windows GUI and workflow only.
+  Require production Windows, Windows-local GUI/native and Windows distributed
+  hosted gates on the exact candidate before normal merge. Preserve Mac source
+  and workflows, but defer Mac application/Swift validation and remote control;
+  automatically triggered Mac CI is separate evidence for this phase.
+- Keep a retry-cap fixture's timing budget distinct from deadline rejection.
+  Nine PowerShell check commands plus four backoffs can exceed ten seconds on a
+  loaded hosted runner. Use the bounded thirty-second fixture budget and 800 ms
+  per-read delay to cross that old boundary deterministically, while requiring
+  exact four retries, nine reads, attention, no merge and a forty-five-second
+  wall bound. Preserve production's twenty-minute deadline and its separate
+  short pending-check rejection test.
+- Model availability can change while the cached catalog and executable remain
+  the same. The later saved GPT-6.1-Sol/medium selection returned READY through
+  a real response-only probe on 2026-10-13. Retain the earlier account rejection
+  as historical evidence; verify current inference and preserve saved choices
+  rather than treating an older result as permanent model availability.
+- The GUI-only C# ChatGPT fixture forwards non-ChatGPT commands to
+  `assemblywright-local-real.exe`. That copy is used even though its filename
+  appears only inside the fixture source. Trace fixture forwarding before
+  removing apparent dead setup. The native pipeline is real in those UIA
+  scenarios; the model/provider responses remain deterministic fixtures.
+- Global permissions and their bounded audit share one atomic
+  `permissions.json` authority document. `permissions-audit.json` is only a
+  compatibility mirror. Ask requires owner approval for edits and validation;
+  Auto permits scoped edits but requires approval for validation; Full permits
+  both. The local default is Full under the owner's requested autonomous lane.
+  Revision changes are rejected while paused or a runner/publication owns state.
+- Pending approval binds the displayed token, revision, run, action, digest,
+  and timestamp to a per-run issued-request artifact. Approval show, decide,
+  and consume all verify that binding. Cancellation/pause and effect permission
+  share the control lock; an earlier committed stop wins even after approval.
+- Model discovery enforces model-specific reasoning values when `/v1/models`
+  advertises them. If metadata is absent, evidence explicitly records forwarding
+  the selected standard value. Separate reviewer/model/effort choices are frozen
+  into new jobs; an older job without reviewer fields retains its own model.
+- `assemblywright-github` owns the Windows panel's native CLI adapter. Create
+  local project makes an empty folder; explicit Save Connection prepares an
+  empty folder from the selected repository/base. Publication binds the exact
+  completed run, candidate, connection revision, PR head/base, required checks,
+  and verified merge receipt. Explicit reconciliation handles ambiguous effects
+  and validates the immutable completion revision even after newer state changes.
+  A missing/corrupt receipt downgrades apparent success to attention.
+- A successful connected publication fast-forwards only the exact clean,
+  unchanged connected source to the verified merge. Two successive native E2E
+  publications prove that the next feature includes the previous merged result.
+  Unconnected work retains a private candidate without changing its source.
+- The first real website demonstration exposed a handoff gap missed by the
+  earlier separate fixture suites: the runner created an unrelated snapshot
+  commit while publication required source-HEAD ancestry. Snapshot creation now
+  independently copies the exact source commit's reachable Git object closure,
+  initializes its index from that tree, and starts detached at the source HEAD.
+  It imports no configuration/remotes and leaves source state unchanged.
+  Publication regression coverage must consume an actual runner-produced
+  completed report/candidate, not only hand-constructed descendant clones.
+- After ancestry preservation, confinement must compare candidate HEAD with
+  the exact run-captured source HEAD, never the last commit returned by a
+  revision walk. A real follow-up falsely rejected unchanged `styles.css`
+  because the old check compared against the ancient root. Positive native E2E
+  now includes a forbidden-file change in history before the frozen source;
+  the corresponding negative still rejects a new forbidden model edit.
+- The same website run exposed Qwen repeating unchanged failing markup when
+  diagnostics followed a large source dump. Repairs now prioritize the concrete
+  failure first/last. Exact no-op repair attempts skip approval/validation while
+  retaining the prior diagnostic plus a corrective instruction; unchanged
+  output is never completion. Keep failed model/gate artifacts for diagnosis.
+- Reasoning-enabled Qwen generation exceeded the former 180-second HTTP limit
+  because the local server default had unlimited generation. Coding/review now
+  request 32,768 maximum tokens, explicit effort-dependent thinking budgets
+  (0/128/512/2048/4096/8192/12288/16384), separate reasoning format, ten-second
+  connect and 900-second total deadlines, with unchanged 150ms cancellation.
+  The actual local llama.cpp build `10901` / `28ff09582` supports
+  `reasoning_budget_tokens`; this is a requested local-adapter policy, not a
+  guarantee that arbitrary compatible servers honor unsupported fields.
+- Implementation and review requests ask for JSON-object output and preserve
+  the requested mode in role artifacts, but llama.cpp `28ff09582` uses a lazy
+  grammar trigger around reasoning. A forced thinking-budget cutoff can admit
+  residual planning prose before the JSON object. Keep strict parsing and
+  bounded malformed-response retries; do not silently extract an arbitrary
+  object or switch model/effort. A new submitted job can explicitly choose
+  `none` for narrow content changes, with that choice retained in its artifacts.
+- Do not request `reasoning_format:none` just because thinking is disabled.
+  This server/template returns a literal empty `<think></think>` envelope in
+  `message.content`, which strict JSON parsing correctly rejects. A real A/B
+  probe proved `deepseek` separates that envelope while keeping effort `none`,
+  budget zero, and `enable_thinking:false`. Both roles now always request that
+  extraction format; native E2E checks the request and durable role artifacts.
+- The demo site's WebKit visual checks must settle viewport/scroll repaint and
+  set one neutral pointer position before paired screenshots. Otherwise the
+  preceding Reset button's hover can clear between captures. The owner-authored
+  harness now moves the pointer and waits two animation frames; all functional,
+  overflow, error and strict byte-identical screenshot assertions remain intact.
+- The real Final Fantasy Tactics website demo lives in its own local repository,
+  `C:/Users/mike/Codex/Final-Fantasy-Tactics-Demo`. Initial generation completed
+  through the Windows Assembly Line on attempt four; the installed-app content
+  follow-up `23e06212-7a67-4e50-8ebe-d908a135fcbf` completed on attempt five,
+  with content checks, 24 browser groups, and a separate fresh same-Qwen review.
+  Final integrated commit is `c1e316f8fc01e091f2338bfadf5b4f103870736e`.
+  This proves local candidate generation/repair/review and guarded operator
+  integration; it does not establish real GitHub publication. See the Windows
+  local-pipeline closeout for exact artifacts, runtime hashes and verdicts.
+- Acceptance failures should name the offending literal/path, not only a generic
+  boolean failure. The content guard's explicit remaining Archer wording gave
+  the automatic repair a concrete target. Improve diagnostics without relaxing
+  acceptance criteria; keep failed/no-op/malformed attempts and reviewer calls.
+- The first real private GitHub setup on 2026-10-13 exposed two CLI differences
+  not covered by the original fixtures. GitHub CLI 2.96.0 reports a missing repo
+  as `GraphQL: Could not resolve to a Repository with the name 'owner/repo'.
+  (repository)`, rather than the fixture's bare `HTTP 404`. Creation now accepts
+  only the exact requested-slug-bound message or exact legacy 404; unknown auth,
+  permission, network, extra-output and wrong-slug errors fail closed. Existing
+  and newly created repos both verify the requested identity and visibility.
+- `gh pr checks` 2.96.0 rejects `--watch` combined with `--json`. Publication now
+  polls structured required-check JSON under one twenty-minute deadline,
+  retries documented head-bound check-arrival messages and pending exit 8,
+  and requires a nonempty all-pass set. Failed/cancelled/skipped, malformed,
+  contradictory and unknown results stop before merge. Cancellation/pause
+  remains responsive during polling, and exact PR/head/base checks still bracket
+  the final match-head merge. Fixtures now reject the incompatible flag pair.
+- GitHub Actions does not allow the `runner` context in job-level `env`.
+  The demo's initial hosted workflow failed before any job started because its
+  evidence path used `runner.temp` there. A static ignored `test-results` path
+  is valid. Run actionlint before publication; YAML parsing alone cannot detect
+  this context error. The diagnostic and positive control are retained under
+  `target/fft-demo`, and the publication feature confines the workflow repair to
+  that one value while preserving pinned actions, permissions and all checks.
+- The real private publication also exposed a GUI-only path-format failure:
+  native Rust persisted `\\?\C:\...` while the installed .NET Framework
+  frontend called legacy `Path.GetFullPath` directly. The merge and guarded
+  source fast-forward succeeded, but queue confirmation raised "Illegal
+  characters in path". At the GUI comparison/display boundary, recognize only
+  ordinary/verbatim absolute drive and UNC paths, reject device namespaces,
+  alternate data streams, reserved names, dot segments, trailing dot/space and
+  normalization-changing payloads, and compare the resulting exact roots without
+  throwing. Keep canonical native authority and every run, candidate, connection,
+  source, PR, merge and durable receipt check intact. Reconcile a retained verified
+  merge through the GUI control; starting publication again can duplicate work.
+- The owner authorized and the installed Windows app completed real private
+  GitHub publication for `malak333/Final-Fantasy-Tactics-Demo` on 2026-10-13.
+  PR #1 merged to `f17b871b44521451cfb206bfb3d1a6ababa679de`; its GUI-only
+  path confirmation failure was recovered through Reconcile without a duplicate
+  PR. Fresh run `7b7d3b69-dcdc-483e-8421-ecc6fb08057f` then completed a
+  docs-only PR #2 automatically through local inference, validation, review,
+  required checks, merge, guarded source update and GUI Completed/succeeded.
+  Final `HEAD = origin/main = GitHub main` is
+  `7058a3412e0da7951371dec809c00d5a16a011bc`, receipt revision 21 is verified,
+  and required PR/push runs `38420497412`/`38420690745` each passed all 24
+  browser groups. The demo owns a durable `docs/workflow-proof.md` closeout.
+  Assemblywright application source was not committed/pushed; its tested local
+  bundle was installed. Exact artifacts, hashes, review and proof limits are
+  recorded in the Windows local-pipeline closeout.
+- Enforce HTTP size bounds before whole-body buffering. Catalog/completion
+  readers reject excessive Content-Length and cap incremental chunk accumulation
+  to 1 MiB/4 MiB. Token budgets alone cannot bound a faulty loopback server's
+  response. Native HTTP E2E covers both declared and chunked overflows.
+- Queue completion must bind the launched child's own terminal report, then
+  check that exact run against persisted state. A later `latest.json` report
+  can belong to another CLI run; status polling cannot establish ownership.
+  Acquire the launch guard before asynchronous preflight so rapid Start clicks
+  cannot overlap or leave two queue entries running.
+- WinForms owned dialogs appear as descendants of their main window in UI
+  Automation. Search that owner before desktop-level windows. Tab content is
+  exposed asynchronously after selection; wait for its controls before reading.
+  Discover the root window through `RootElement` and its process ID; a direct
+  `FromHandle` lookup can initially expose only native proxy panes. Polling
+  atomic JSON replacements uses shared read/delete file handles and tolerates
+  transient replacement reads before deciding a terminal test result.
+- Multiline .NET Framework text boxes expose UIA TextPattern without
+  ValuePattern. Native GUI tests set their text with WM_SETTEXT only after
+  checking the control belongs to the identified test process. Dynamic labels
+  must expose their actual text to accessibility; stable Control.Name supplies
+  AutomationId without replacing the spoken label with an internal ID.
+- The launch path owns one child-exit completion task. Close awaits that task
+  rather than competing with the launch continuation's WaitForExit/Dispose.
+  Partial stream-reader setup failures require confirmed child cleanup; retain
+  process ownership and keep the window open if exit cannot be confirmed.
+- The final exact-controls Windows gate passed fourteen GUI unit groups,
+  thirty-six native E2E cases, owner approve/reject, separate model roles,
+  publication success/attention/wrong-run/cancel, two sequential approved
+  fixture features, failure/cancel/preflight-stop/restart, chat stop/pause/history,
+  and actual local Qwen chat plus demo implementation. The final live run,
+  evidence root, and installed bundle digest are recorded under the exact Mac
+  controls closeout in `docs/windows-local-pipeline.md`. The installed native
+  account refresh also verified `malak333`; remote writes were fixture-tested.
+
+- The native Windows GUI lives in `apps/windows`. It compiles to a .NET
+  Framework WinForms `Assemblywright.exe` using the Windows-shipped C#
+  compiler, avoiding a new SDK/package dependency. The portable bundle
+  includes the native runner, GitHub adapter, and demo launcher.
+- `Assemblywright.cmd` opens the GUI from the checkout.
+  `scripts/install-windows-gui.ps1` installs to
+  `%LOCALAPPDATA%/Assemblywright/WindowsApp` and creates Desktop/Start shortcuts.
+  GUI job forms freeze the exact local job before invoking the same runner.
+- The GUI uses native Windows UI Automation E2E rather than browser tests.
+  Rust reports can contain extended DOS paths (`\\?\C:`); the .NET Framework
+  GUI normalizes them for file existence checks and Explorer actions.
+- `scripts/validate-windows-gui.ps1 -LiveDemo` is the GUI closeout gate.
+  Native UIA covers completed results/logs, explicit cancel, pause/resume,
+  active close, and failed-cancel retention/recovery. Test-mode windows are
+  offscreen and omit the taskbar, so `Process.CloseMainWindow()` has no usable
+  main handle; close through UI Automation `WindowPattern.Close` to exercise
+  the actual form close handler.
+- The GUI line editor rejects empty or CR/LF-containing validation argv tokens
+  before load/run/save rather than changing them. Use a wrapper executable for
+  those cases. The runner itself still supports its original JSON argv format.
+- The final installed GUI was launched successfully on 2026-10-12; Desktop and
+  Start shortcuts point to the tested installed executable. Exact GUI evidence
+  and deployment hash are recorded in `docs/windows-local-pipeline.md`.
+
+- The owner prioritized a complete same-computer Windows pipeline. Mac control
+  and distributed execution are deferred. `docs/windows-local-pipeline.md`
+  overrides the earlier two-machine designs within the local lane's scope.
+- The owner requested Windows-specific CI for Windows-only push/merge phases.
+  Apply the `windows-only` PR label and retain exact `[windows-only]` in the
+  merge/main message. All three Windows workflows stay enabled; a Windows scope
+  selector skips only the Mac runner. Other scopes, label removal, explicit
+  dispatch and unknown/malformed event data retain full CI. Unrelated labels
+  must use an alternate check context so a newer skipped run cannot shadow
+  earlier full-release evidence. Skipped checks never establish full release
+  proof. See [Windows CI scope](../windows-ci-scope.md).
+- A PowerShell child script's `exit 1` does not automatically stop its caller.
+  A subsequent native command can overwrite `$LASTEXITCODE` and create a false
+  green gate. Check the exit immediately, require fresh completion evidence
+  from that exact invocation, and test rejection at the actual wrapper entry
+  point with disposable native-process dependencies. A shared old pass JSON
+  or a successful hosted job without current journey evidence is insufficient.
+- Windows settings Reload closes the old modal and asynchronously creates its
+  replacement after model discovery. Native UIA must wait for a different
+  window handle, scope popup selections to that GUI process, and verify the
+  selected value. Reacquiring an old closing dialog can falsely report missing
+  model or reasoning choices; saved settings assertions remain necessary.
+- Persist a confirmed queue result before refreshing its presentation, and
+  catch display failures separately. Throwing a refresh exception into the
+  generic queue failure handler can rewrite an already saved Completed result
+  as Failed. A projection failure stops further queue advancement while keeping
+  saved run/publication bindings and pending frozen work. Persistence failures
+  remain throwing failures; an injected real Save/Load regression covers both
+  boundaries. Always balance native ListView BeginUpdate/EndUpdate with finally.
+- The previous general coding worker executed supplied file operations rather
+  than asking a model to implement a feature, and required macOS. The durable
+  orchestration ledger had no automatic dispatcher. A healthy Windows service
+  and green fixture proofs did not provide autonomous feature completion.
+- `assemblywright-local` is a standalone binary in the master package. It owns
+  a separate locked local run state, independent Git candidates, loopback
+  inference, scoped edits, deterministic validation, bounded repair, separate
+  model review, local pause/cancellation, and completed candidate reports. It
+  does not activate or migrate the distributed master database.
+- `scripts/windows-local-pipeline.ps1 -Demo` exercises real local inference on
+  an unimplemented Python library and CLI with owner-written acceptance tests.
+  `-Job PATH` runs an owner-supplied specification. Default local state is
+  `%LOCALAPPDATA%/Assemblywright/local-pipeline`; status/pause/resume use the
+  same explicit state directory.
+- The observed local runtime is `C:/AI/llama/llama-server.exe`, serving the
+  OpenAI-compatible interface at `http://127.0.0.1:8080/v1` with
+  `qwen3.6-35b-a3b`. Verify runtime/model availability before future live runs.
+- Local validation is trusted owner-selected code running as the normal
+  Windows user. No AppContainer, Mac enrollment, signing, mTLS, cloud
+  credentials, or distributed activation-proof ceremony is required. Retain
+  source isolation, scoped edits, cancellation, bounded output, locking, and
+  truthful terminal state for operational reliability.
+- A completed unconnected local candidate is not a source-branch update or
+  GitHub publication. Connected Assembly Line completion additionally requires
+  verified publication and the guarded source fast-forward. Native
+  fake-inference E2E is not live-model quality evidence.
+- The native gate is `scripts/validate-windows-local-pipeline.ps1`; `-LiveDemo`
+  adds actual model execution. On 2026-10-12 the full gate and live run passed:
+  three local unit tests, thirteen native E2E cases, and twelve live feature
+  acceptance tests. Exact local evidence and proof boundaries are recorded in
+  `docs/windows-local-pipeline.md` under the verified closeout.
+- Windows PowerShell 5.1 interprets UTF-8 scripts without BOM as an ANSI code
+  page. Keep embedded demo test strings ASCII with Python Unicode escapes;
+  writing UTF-8 output afterward cannot repair a literal already misdecoded
+  when PowerShell loaded the script. The legacy-shell live run caught this.
+- Git Bash lacks `shasum` on this machine. The docs drift check uses Python to
+  hash canonical LF workflow bytes, avoiding both that dependency and CRLF
+  checkout drift. The remaining Mac release proof controllers still require
+  their own native toolchain; they are not the Windows runtime gate.
 
 ## Product Identity And Licensing
 

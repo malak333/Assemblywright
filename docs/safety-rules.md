@@ -155,6 +155,72 @@ checks bound inherited state and descendant lifetime under the owner account. Th
 are not production hostile-process containment and stay separate from live-device,
 release, and Windows-hosted proof.
 
+## Windows local execution scope (2026-10-12)
+
+The owner's same-computer pivot is defined in `docs/windows-local-pipeline.md`
+and overrides the two-host enrollment and distributed activation prerequisites
+for `assemblywright-local`. Submitting a local job authorizes automatic local
+implementation, deterministic validation, repair, separate model review, and a
+private candidate commit. Validation runs as ordinary owner-selected code;
+AppContainer and live distributed proof requirements do not apply to this lane.
+Preserve source isolation, file scope, bounded execution, cancellation and local
+Emergency Pause, exclusive state ownership, and truthful interrupted/failed
+reports. Candidate completion does not authorize source-branch mutation or
+external publication. Raw requests and gate output are private local development
+artifacts, separate from structurally redacted distributed audit/event surfaces.
+All existing distributed and Mac rules below continue to govern those surfaces.
+
+The Windows GUI's Run action is an explicit owner submission of the frozen
+local job. Its editor, process supervision, status projection, and result
+buttons add no model authority, remote listener, distributed activation, source
+mutation, or publication permission. Keep the form responsive, preserve native
+argument boundaries, expose failures, and distinguish current runs from older
+completed reports. Cancel, pause, resume, and normal close must reach the native
+runner; closing the window must not report unobserved completion.
+
+The owner's Mac-parity request permits local feature-planning chat and the
+Windows Assembly Line queue. A chat reply is text only and cannot grant file,
+tool, queue, or publication authority. Copying a draft into the editor does not
+submit it. Adding a frozen job to the line is an explicit owner approval; Start
+Line permits sequential execution only after exact owned completion. Pause,
+cancellation, failure, and interrupted recovery stop automatic progression.
+The UI queue and local chat/settings artifacts are separate from the schema-v19
+distributed conveyor and its redacted event stream. Existing cloud, general
+assistant, plugin, voice, personal-memory, and scheduler prohibitions continue
+outside this narrowly requested planning surface.
+
+The owner's exact Mac-controls follow-up also authorizes local role settings,
+global tool permissions, and GitHub account/repository setup. An explicit saved
+project connection opts future successful features into branch, pull request,
+required-check, and automatic merge steps. Unconnected candidate completion
+grants no publication authority. Bind publication to the exact validated run,
+candidate commit, project/repository/base, and connection revision; retain
+durable receipts and reconcile uncertain external effects before retrying.
+Cancel and pause prevent later publication effects. Ask/Auto/Full permissions
+must control real edit and validation-command approvals, not just panel text.
+Changing permissions or role settings requires idle, unpaused work. Models
+cannot grant approval or change connections. The current owner's relaxed local
+workflow starts with Full access until the owner explicitly selects another
+mode; each available operation remains bounded by its concrete job contract.
+The connection also authorizes preparing an empty selected local project and,
+after an exactly verified GitHub merge, fast-forwarding its clean unchanged
+checkout to that confirmed merge. Preserve dirty or mismatched source state;
+unconnected jobs continue to preserve the selected source checkout entirely.
+
+The owner's 2026-10-13 correction explicitly permits ChatGPT/Codex for the
+orchestrator's planning/chat and the final review roles, matching the historical
+Mac controls. Implementation remains local. Reuse the owner's authenticated
+Codex sign-in without copying, displaying or persisting credentials in
+Assemblywright. Cloud requests are bounded supplied-text requests with every
+tool surface disabled; they cannot execute commands, access the working
+repository or change queue/publication authority. Freeze each role's provider,
+model and supported reasoning pair before submission, retain provider-specific
+artifacts, and reject missing authentication, unsupported pairs, malformed
+responses and provider errors without silently switching to local inference.
+Pause, cancellation, deadlines and child-process cleanup apply to both roles.
+This scoped exception does not restore the retired general assistant or alter
+the fixed distributed review-provider proof contract.
+
 ## Policy Defaults
 
 - One authenticated owner holds all authority. Models and workers may propose,

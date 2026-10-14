@@ -3,7 +3,7 @@ use assemblywright_master::{
     validate_github_branch_protection_observation, validate_github_required_checks_observation,
     validate_github_workflow_content, validate_proof_cleanup_status, validate_proof_source_binding,
     validate_remote_base_observation, GithubPublicationLiveProofReceipt, ProcessGithubPublication,
-    PublicationAdapterError, PublicationExecutionControl,
+    PublicationAdapterError, PublicationExecutionControl, GITHUB_PUBLICATION_ACTION_DEADLINE,
 };
 use serde_json::json;
 #[cfg(not(windows))]
@@ -13,6 +13,63 @@ use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+
+const PUBLICATION_GATE_QUEUE_MARGIN: Duration = Duration::from_secs(10 * 60);
+
+#[test]
+fn publication_deadline_covers_pinned_workflow_budgets_with_queue_margin() {
+    let repository = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .nth(2)
+        .expect("the master crate must be nested under the repository crates directory");
+    let workflow_budgets = [
+        workflow_timeout(repository, ".github/workflows/release-local.yml"),
+        workflow_timeout(repository, ".github/workflows/windows-protocol.yml"),
+    ];
+    let longest_gate = *workflow_budgets
+        .iter()
+        .max()
+        .expect("the pinned workflow set must not be empty");
+
+    assert_eq!(
+        GITHUB_PUBLICATION_ACTION_DEADLINE,
+        Duration::from_secs(110 * 60),
+        "the publication action deadline must remain explicitly bounded"
+    );
+    assert!(
+        longest_gate + PUBLICATION_GATE_QUEUE_MARGIN <= GITHUB_PUBLICATION_ACTION_DEADLINE,
+        "the longest pinned workflow budget plus queue/read margin exceeds the publication action deadline"
+    );
+}
+
+fn workflow_timeout(repository: &Path, relative_path: &str) -> Duration {
+    let path = repository.join(relative_path);
+    let workflow = fs::read_to_string(&path)
+        .unwrap_or_else(|error| panic!("failed to read {}: {error}", path.display()));
+    let configured = workflow
+        .lines()
+        .filter_map(|line| line.trim().strip_prefix("timeout-minutes:"))
+        .map(|value| {
+            value
+                .split('#')
+                .next()
+                .expect("split always yields one value")
+                .trim()
+                .parse::<u64>()
+                .unwrap_or_else(|error| {
+                    panic!("invalid timeout-minutes in {}: {error}", path.display())
+                })
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        !configured.is_empty(),
+        "{} must define a job timeout-minutes budget",
+        path.display()
+    );
+    // The release selector and Mac runner are dependent jobs. Summing all
+    // configured jobs conservatively bounds that path and future dependencies.
+    Duration::from_secs(configured.into_iter().sum::<u64>() * 60)
+}
 
 #[test]
 fn default_configuration_is_unavailable_without_creating_state() {
@@ -168,6 +225,15 @@ fn required_checks_parser_pins_github_app_and_uses_latest_run() {
         validate_github_required_checks_observation(&exact, &workflows, commit).unwrap(),
         [0; 32]
     );
+    for conclusion in ["skipped", "neutral", "cancelled"] {
+        let mut incomplete_release = exact.clone();
+        incomplete_release["check_runs"][0]["conclusion"] = json!(conclusion);
+        assert_eq!(
+            validate_github_required_checks_observation(&incomplete_release, &workflows, commit),
+            Err(PublicationAdapterError::MissingEvidence),
+            "a {conclusion} release job cannot become full release-publication evidence"
+        );
+    }
 
     let duplicate = json!({
         "check_runs": [
@@ -197,7 +263,7 @@ fn required_checks_parser_pins_github_app_and_uses_latest_run() {
     assert_eq!(
         validate_github_workflow_content(
             ".github/workflows/release-local.yml",
-            "51e809a94f59193e213bdff6e49f3a86e612643f094e366055f42f8745026fd7",
+            "6c2e8710ec2cae10287dbed0d1f7343059d1630a7ca8749191c0d77dc7e083a4",
             &trusted_release,
         ),
         Ok(())
@@ -207,7 +273,7 @@ fn required_checks_parser_pins_github_app_and_uses_latest_run() {
     assert_eq!(
         validate_github_workflow_content(
             ".github/workflows/release-local.yml",
-            "51e809a94f59193e213bdff6e49f3a86e612643f094e366055f42f8745026fd7",
+            "6c2e8710ec2cae10287dbed0d1f7343059d1630a7ca8749191c0d77dc7e083a4",
             &replaced,
         ),
         Err(PublicationAdapterError::MissingEvidence)
@@ -398,8 +464,8 @@ fn valid_config(gh: &[u8], git: &[u8]) -> serde_json::Value {
         "merge_strategy": "merge",
         "post_merge_gate": "release-local",
         "required_checks": [
-            {"id":"release-local","workflow":"Assemblywright Release Local Gate","context":"Release local gate","app_id":15368,"workflow_id":282605278,"workflow_path":".github/workflows/release-local.yml","workflow_sha256":"51e809a94f59193e213bdff6e49f3a86e612643f094e366055f42f8745026fd7"},
-            {"id":"protocol-windows","workflow":"Assemblywright Windows Distributed Gate","context":"Protocol, master, identity, mTLS, and SCM","app_id":15368,"workflow_id":314849303,"workflow_path":".github/workflows/windows-protocol.yml","workflow_sha256":"4284a27f06f7808179665e3ac0cbd90081e358a6c09b82d188ec6d414652b207"}
+            {"id":"release-local","workflow":"Assemblywright Release Local Gate","context":"Release local gate","app_id":15368,"workflow_id":282605278,"workflow_path":".github/workflows/release-local.yml","workflow_sha256":"6c2e8710ec2cae10287dbed0d1f7343059d1630a7ca8749191c0d77dc7e083a4"},
+            {"id":"protocol-windows","workflow":"Assemblywright Windows Distributed Gate","context":"Protocol, master, identity, mTLS, and SCM","app_id":15368,"workflow_id":314849303,"workflow_path":".github/workflows/windows-protocol.yml","workflow_sha256":"a865984156057ad6c0443d29008a1feeaf37796cb06429b0e9e68f7ecb12e7c6"}
         ],
         "gh_executable_sha256": hex(&Sha256::digest(gh)),
         "git_executable_sha256": hex(&Sha256::digest(git)),

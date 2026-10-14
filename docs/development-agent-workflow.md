@@ -85,7 +85,16 @@ overrides, and confirms the root instructions reference every role.
 
 ## Feature And Phase Closeout
 
+The owner's standing closeout instruction (2026-10-13) requires the applicable documentation and knowledge-base update, unit and E2E workflows, independent review, scoped push/PR merge and verified hosted gates for every authorized feature or phase. Preserve unrelated uncommitted work. The E2E technology follows the actual boundary: browser matrices for generated sites, native process/protocol/UI Automation for the Windows app.
+
 Every feature or phase closes as one auditable slice. Before publication:
+
+The owner's Windows-only clarification (2026-10-13) scopes the current GUI and
+local workflow phase to the production Windows, Windows-local GUI/native and
+Windows distributed hosted gates on the exact candidate. Mac application and
+Swift validation are deferred and do not block this phase's merge. Existing
+Mac source and workflows remain intact; automatically triggered Mac CI is
+separate evidence, not Windows acceptance.
 
 1. Re-read the applicable accepted design, safety rules, requirements, and
    canonical build commands. Update implementation and documentation together;
@@ -105,7 +114,9 @@ Every feature or phase closes as one auditable slice. Before publication:
    services, and Mac/Windows paths require native cross-process, packaged-app,
    service, or live-device E2E.
 5. Run focused tests, `./scripts/release-docs-drift-smoke.sh`,
-   `git diff --check`, and `./scripts/release-local.sh`. Keep Windows-only,
+   `git diff --check`, and the canonical gate applicable to the phase. Use the
+   Windows GUI/native and Windows hosted gates for this Windows-only phase;
+   `./scripts/release-local.sh` applies to Mac application work. Keep Windows-only,
    signing, notarization, clean-profile, and live-device evidence separate and
    name every unexecuted boundary.
 6. Obtain an independent review proportional to risk and resolve every blocking
@@ -119,6 +130,11 @@ Every feature or phase closes as one auditable slice. Before publication:
    after the checks pass, then verify the reviewed commit is contained in
    `origin/main` and local `HEAD` equals the published main SHA. A local pass,
    successful push, or merge while checks are pending is not closeout.
+   For Windows-only phases, apply the `windows-only` PR label and preserve
+   `[windows-only]` in the merge/main commit message. Verify the scope selector
+   succeeds, the Mac runner job is skipped, and all Windows gates pass. Other
+   scopes keep full CI; removing the label or explicit workflow dispatch restores
+   the Mac gate. Never record a skipped Mac job as full release evidence.
    If deployment or live proof happens after the implementation commit, record
    that evidence in a docs-only closeout commit, run the required hosted gates
    for that exact final SHA, and restore authoritative-host source parity. Do

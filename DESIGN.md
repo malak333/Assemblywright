@@ -131,6 +131,41 @@ review receipt or replay application effects.
 This document is the system-level design. Two documents own the detailed
 accepted designs and take precedence within their scope:
 
+**2026-10-12 execution pivot:** the first supported end-to-end workflow is the
+same-computer Windows lane in [`docs/windows-local-pipeline.md`](docs/windows-local-pipeline.md).
+It takes precedence for local implementation, validation, review, and candidate
+completion. Local inference runs on Windows. Mac control and distributed
+execution remain deferred; their existing contracts describe that later lane.
+Local jobs do not require distributed activation receipts.
+The native WinForms GUI in `apps/windows` owns the Windows local job editor,
+progress, and cancellation controls; it supervises `assemblywright-local`
+without adding a second execution authority or changing the distributed schema.
+The owner additionally requested the Mac-style header controls, Assembly Line,
+and right-side chat. Windows feature-planning chat uses the explicit local
+endpoint and can only draft text for owner submission. The GUI's durable local
+Assembly Line runs owner-approved frozen jobs sequentially, advancing only on
+verified completion; it does not activate the distributed conveyor.
+The owner's follow-up requires the latest three-icon Mac contract (historical
+revision `9c049d6`): GitHub publication, global Permissions, then Settings. The
+GitHub panel manages accounts, repositories, project connections, and automatic
+feature-branch/PR publication after required checks. Saving an owner connection
+authorizes that pipeline for future connected features; unconnected work stays
+local. Windows owns the native local publication adapter and durable receipts.
+Permissions control actual edit/command approval, and Settings select separate
+local orchestrator and reviewer models and reasoning levels. This extends the
+same-computer lane without restoring the retired general assistant runtime.
+
+**2026-10-13 owner correction:** Mac parity requires ChatGPT/Codex for
+orchestrator planning/chat and final review, with independently selected models
+and advertised reasoning levels. The prior Windows surface incorrectly used
+the local implementation model for the Orchestrator role. Keep implementation
+on the local Windows inference endpoint; add a bounded response-only Codex
+adapter for the requested cloud roles. It reuses the owner's ChatGPT sign-in,
+loads the provider's model catalog, and never gives those roles tools or
+repository-write authority. Newly approved jobs freeze provider, model and
+reasoning. Existing frozen local jobs retain their original behavior, and
+provider failures never trigger silent fallback.
+
 - [`docs/feature-conveyor-design.md`](docs/feature-conveyor-design.md) — the
   approved Feature Conveyor target and the implemented repository-kernel slice.
 - [`docs/distributed-developer-mode-design.md`](docs/distributed-developer-mode-design.md)
@@ -273,6 +308,8 @@ Full-machine target phase: planning/creation containment has bounded native Wind
 - No general-purpose assistant surface. Conversation, personal memory,
   scheduling, voice, and a plugin marketplace were removed with the pivot to
   Developer Mode and are not planned.
+  The explicitly requested Windows feature-planning chat is a scoped exception:
+  no tools, repository mutation, automatic queue submission, or publication.
 
 ## Architecture
 
