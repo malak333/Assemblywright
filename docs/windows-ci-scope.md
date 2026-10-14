@@ -40,6 +40,7 @@ must change together whenever the selector workflow changes.
 Run the real selector matrix and workflow contracts on Windows:
 
 ```powershell
+./scripts/test-release-local-selector-cli.ps1
 ./scripts/test-release-local-selector.ps1 -EvidencePath target/windows-ci/windows-ci-scope.json
 & 'C:/Program Files/Git/bin/bash.exe' ./scripts/release-ci-workflow-smoke.sh
 cargo test -p assemblywright-master --test github_publication_adapter --locked
@@ -51,3 +52,11 @@ show successful selection,
 a skipped Mac runner job, and successful Windows workflows on the exact head.
 Use a `[windows-only]` merge message and verify the same selection on published
 main. These checks affect CI routing; Mac application work remains deferred.
+
+The native CLI regression starts fresh PowerShell processes with an unset or
+inherited nonzero exit code, then reproduces the hosted caller's immediate
+exit-code check. Selector rejection and cleanup rejection must exit nonzero
+without a passing report. The event matrix emits success only after cleanup
+and evidence writing succeed, explicitly reporting exit zero to its caller.
+All four CLI cases run in the Windows-local gate; their separate artifact is
+`target/windows-ci/windows-ci-scope-cli.json`.

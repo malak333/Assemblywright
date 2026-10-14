@@ -2,6 +2,12 @@
 
 ## Windows installed GUI observation
 
+- Pure PowerShell scripts can leave `LASTEXITCODE` unset or inherited even when
+  their assertions pass. A hosted caller comparing that value with zero can
+  reject a successful suite. Report zero explicitly after cleanup and evidence
+  writing, and regress the actual native caller with both initial states.
+  Rejections must retain nonzero exit status and emit no passing report.
+
 - Bind deployment proof to all four tested runtime digests, the installed PID,
   exact UI control IDs, retained owner JSON hashes and native run identity.
   A rebuilt GUI can have different bytes even with unchanged C# source; preserve

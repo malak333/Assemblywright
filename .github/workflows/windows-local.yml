@@ -45,6 +45,8 @@ jobs:
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
+          & powershell.exe -NoProfile -File ./scripts/test-release-local-selector-cli.ps1
+          if ($LASTEXITCODE -ne 0) { throw 'The Windows-only CI scope native CLI regression failed.' }
           & ./scripts/test-release-local-selector.ps1 -EvidencePath target/windows-ci/windows-ci-scope.json
           if ($LASTEXITCODE -ne 0) { throw 'The Windows-only CI scope regression failed.' }
 
@@ -74,5 +76,6 @@ jobs:
             target/windows-gui-tests/*/gui-unit-tests.json
             target/windows-ci/windows-gui-gate.json
             target/windows-ci/windows-ci-scope.json
+            target/windows-ci/windows-ci-scope-cli.json
             target/windows-gui-tests/*/gui-e2e.json
             target/windows-gui-tests/*/failure.json

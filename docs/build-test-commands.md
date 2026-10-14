@@ -40,7 +40,9 @@ runner with `cargo build --release -p assemblywright-master --bin assemblywright
 That hosted compilation is separate from installed Windows deployment.
 For Windows-only phases, use the `windows-only` PR label and `[windows-only]`
 merge/main commit marker described in [Windows CI scope](windows-ci-scope.md).
-Run `./scripts/test-release-local-selector.ps1` for the native selector matrix.
+Run `./scripts/test-release-local-selector-cli.ps1` for fresh-process exit and
+rejection coverage, and `./scripts/test-release-local-selector.ps1` for the
+eighteen-case event-handler matrix.
 
 ## Developer chat history restoration
 

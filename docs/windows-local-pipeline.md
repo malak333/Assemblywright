@@ -1447,3 +1447,34 @@ demo's browser matrix remains separate. Source publication requires fresh hosted
 Windows gates and the Windows scope selector on the final docs closeout SHA.
 Mac application validation and protected Windows service deployment are outside
 this local GUI phase.
+
+### Hosted selector CLI exit correction
+
+Final-head hosted Windows-local run `38489365334` at `4e85942` passed all eighteen
+selector assertions, then failed the caller's immediate `LASTEXITCODE` check.
+The pure PowerShell matrix had left this value unset; the successful assertion
+report did not establish a successful CI step. Its retained log and artifacts
+are `target/publication/final-4e-windows-scope-step-failure.log` and
+`hosted-windows-local-4e85942-failure/`. No GUI journey ran in that failed gate.
+
+The matrix now emits its report only after guarded cleanup, writes evidence,
+then explicitly reports zero to its caller. Exceptions continue to fail the
+native process. `scripts/test-release-local-selector-cli.ps1` invokes this
+real script in fresh PowerShell processes: initially unset and inherited
+nonzero exit codes must pass, while injected selector and cleanup rejections
+must fail without passing JSON or stdout. All four cases passed under Windows
+PowerShell 5.1 and PowerShell 7.6; the unchanged eighteen event cases remain.
+The new native regression also rejects the original `4e85942` script with the
+same unset-code failure, as `target/publication/selector-cli-red-proof.json`.
+
+Windows CI executes and retains both matrices; its contract smoke binds the
+new native entrypoint and artifact. The CLI suite returns naturally after
+reporting success, and CI launches it in a separate PowerShell process so it
+cannot terminate the calling step. Actual workflow command sequences passed
+in both PowerShell hosts, proving caller continuation and both fresh artifacts
+as `target/publication/selector-step-{ps5,ps7}/workflow-step.json`.
+This correction changes CI/test scripts
+and documentation only. The installed canonical bundle, owner state and
+earlier automatic demo evidence remain unchanged. The final publication still
+requires fresh successful Windows workflows and the successful scope selector
+on the reviewed final head.

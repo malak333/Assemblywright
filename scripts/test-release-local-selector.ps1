@@ -191,15 +191,6 @@ try {
         scenarios = @($results | ForEach-Object { $_ })
     }
 
-    if ($EvidencePath) {
-        $parent = Split-Path -Parent $EvidencePath
-        if ($parent) {
-            [System.IO.Directory]::CreateDirectory($parent) | Out-Null
-        }
-        $report | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $EvidencePath -Encoding UTF8
-    }
-
-    $report | ConvertTo-Json -Depth 8
 }
 finally {
     if (Test-Path -LiteralPath $testRoot) {
@@ -213,3 +204,14 @@ finally {
         Remove-Item -LiteralPath $testRoot -Recurse -Force
     }
 }
+
+if ($EvidencePath) {
+    $parent = Split-Path -Parent $EvidencePath
+    if ($parent) {
+        [System.IO.Directory]::CreateDirectory($parent) | Out-Null
+    }
+    $report | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $EvidencePath -Encoding UTF8
+}
+
+$report | ConvertTo-Json -Depth 8
+$global:LASTEXITCODE = 0
